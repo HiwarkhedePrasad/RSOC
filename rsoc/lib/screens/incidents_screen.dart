@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import '../theme/app_theme.dart';
+import '../services/api_service.dart';
 
 class IncidentsScreen extends StatefulWidget {
   const IncidentsScreen({super.key});
@@ -11,11 +12,34 @@ class IncidentsScreen extends StatefulWidget {
 class _IncidentsScreenState extends State<IncidentsScreen>
     with SingleTickerProviderStateMixin {
   late TabController _tabController;
+  List<dynamic> _anomalies = [];
+  bool _isLoading = true;
+  String? _error;
 
   @override
   void initState() {
     super.initState();
     _tabController = TabController(length: 4, vsync: this);
+    _loadAnomalies();
+  }
+
+  Future<void> _loadAnomalies() async {
+    try {
+      setState(() {
+        _isLoading = true;
+        _error = null;
+      });
+      final data = await ApiService.fetchAnomalies();
+      setState(() {
+        _anomalies = data;
+        _isLoading = false;
+      });
+    } catch (e) {
+      setState(() {
+        _error = 'Failed to load anomalies: $e';
+        _isLoading = false;
+      });
+    }
   }
 
   @override
@@ -148,10 +172,10 @@ class _IncidentsScreenState extends State<IncidentsScreen>
               child: TabBarView(
                 controller: _tabController,
                 children: [
-                  _buildIncidentsList(),
-                  _buildIncidentsList(inProgress: true),
-                  _buildIncidentsList(resolved: true),
-                  _buildIncidentsList(closed: true),
+                  _buildAnomaliesList(),
+                  _buildAnomaliesList(inProgress: true),
+                  _buildAnomaliesList(resolved: true),
+                  _buildAnomaliesList(closed: true),
                 ],
               ),
             ),
@@ -184,111 +208,95 @@ class _IncidentsScreenState extends State<IncidentsScreen>
     );
   }
 
-  Widget _buildIncidentsList({
+  Widget _buildAnomaliesList({
     bool inProgress = false,
     bool resolved = false,
     bool closed = false,
   }) {
-    final incidents = [
-      _Incident(
-        id: 'INC-2024-001',
-        title: 'Unauthorized Access Attempt',
-        description: 'Multiple failed login attempts detected from IP 192.168.1.100',
-        severity: 'Critical',
-        time: '2 minutes ago',
-        status: inProgress
-            ? 'In Progress'
-            : resolved
-                ? 'Resolved'
-                : closed
-                    ? 'Closed'
-                    : 'Open',
-      ),
-      _Incident(
-        id: 'INC-2024-002',
-        title: 'Firewall Rule Violation',
-        description: 'Outbound connection blocked by firewall policy',
-        severity: 'High',
-        time: '15 minutes ago',
-        status: inProgress
-            ? 'In Progress'
-            : resolved
-                ? 'Resolved'
-                : closed
-                    ? 'Closed'
-                    : 'Open',
-      ),
-      _Incident(
-        id: 'INC-2024-003',
-        title: 'Suspicious Network Traffic',
-        description: 'Unusual data transfer pattern detected',
-        severity: 'Medium',
-        time: '1 hour ago',
-        status: inProgress
-            ? 'In Progress'
-            : resolved
-                ? 'Resolved'
-                : closed
-                    ? 'Closed'
-                    : 'Open',
-      ),
-      _Incident(
-        id: 'INC-2024-004',
-        title: 'Malware Detection Alert',
-        description: 'Potential malware signature detected in endpoint',
-        severity: 'Critical',
-        time: '2 hours ago',
-        status: inProgress
-            ? 'In Progress'
-            : resolved
-                ? 'Resolved'
-                : closed
-                    ? 'Closed'
-                    : 'Open',
-      ),
-      _Incident(
-        id: 'INC-2024-005',
-        title: 'SSL Certificate Expiry',
-        description: 'Certificate expiring in 7 days',
-        severity: 'Low',
-        time: '3 hours ago',
-        status: inProgress
-            ? 'In Progress'
-            : resolved
-                ? 'Resolved'
-                : closed
-                    ? 'Closed'
-                    : 'Open',
-      ),
-    ];
+    if (_isLoading) {
+      return const Center(child: CircularProgressIndicator());
+    }
 
-    return ListView.builder(
-      padding: const EdgeInsets.all(16),
-      itemCount: incidents.length,
-      itemBuilder: (context, index) {
-        return _buildIncidentCard(incidents[index]);
-      },
+    if (_error != null) {
+      return Center(
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Icon(Icons.error_outline, color: AppTheme.errorColor, size: 48),
+            const SizedBox(height: 16),
+            Text(
+              _error!,
+              textAlign: TextAlign.center,
+              style: TextStyle(color: AppTheme.errorColor),
+            ),
+            const SizedBox(height: 16),
+            ElevatedButton(
+              onPressed: _loadAnomalies,
+              child: const Text('Retry'),
+            ),
+          ],
+        ),
+      );
+    }
+
+    if (_anomalies.isEmpty) {
+      return const Center(
+        child: Text(
+          'No anomalies detected',
+          style: TextStyle(color: Colors.grey),
+        ),
+      );
+    }
+
+    return RefreshIndicator(
+      onRefresh: _loadAnomalies,
+      child: ListView.builder(
+        padding: const EdgeInsets.all(16),
+        itemCount: _anomalies.length,
+        itemBuilder: (context, index) {
+          final anomaly = _anomalies[index];
+          return _buildAnomalyCard(anomaly);
+        },
+      ),
     );
   }
 
-  Widget _buildIncidentCard(_Incident incident) {
+  Widget _buildAnomalyCard(dynamic anomaly) {
+    final severity = (anomaly['anomaly_score'] as num? ?? 0) > 0.7 ? 'Critical' : 'High';
     Color severityColor;
     IconData severityIcon;
 
-    switch (incident.severity) {
+    switch (severity) {
       case 'Critical':
         severityColor = AppTheme.errorColor;
         severityIcon = Icons.error;
       case 'High':
         severityColor = AppTheme.warningColor;
         severityIcon = Icons.warning;
-      case 'Medium':
-        severityColor = AppTheme.primaryColor;
-        severityIcon = Icons.info;
       default:
         severityColor = Colors.grey;
         severityIcon = Icons.low_priority;
     }
+
+    // Parse timestamp
+    String timeAgo = 'Unknown';
+    try {
+      final timestamp = DateTime.parse(anomaly['timestamp'] as String);
+      final now = DateTime.now();
+      final diff = now.difference(timestamp);
+      if (diff.inMinutes < 60) {
+        timeAgo = '${diff.inMinutes} min ago';
+      } else if (diff.inHours < 24) {
+        timeAgo = '${diff.inHours} hr ago';
+      } else {
+        timeAgo = '${diff.inDays} days ago';
+      }
+    } catch (_) {}
+
+    final zoneName = anomaly['zone_name'] as String? ?? 'Unknown Zone';
+    final topMetric = anomaly['top_metric'] as String? ?? 'unknown';
+    final value = anomaly['value'] as num? ?? 0;
+    final anomalyScore = (anomaly['anomaly_score'] as num? ?? 0).toStringAsFixed(2);
 
     return Container(
       margin: const EdgeInsets.only(bottom: 12),
@@ -330,7 +338,7 @@ class _IncidentsScreenState extends State<IncidentsScreen>
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
                           Text(
-                            incident.id,
+                            zoneName,
                             style: TextStyle(
                               fontSize: 12,
                               color: Colors.grey.shade500,
@@ -338,7 +346,7 @@ class _IncidentsScreenState extends State<IncidentsScreen>
                             ),
                           ),
                           Text(
-                            incident.title,
+                            '${topMetric.replaceAll('_', ' ').toUpperCase()} Anomaly',
                             style: const TextStyle(
                               fontSize: 16,
                               fontWeight: FontWeight.w600,
@@ -357,7 +365,7 @@ class _IncidentsScreenState extends State<IncidentsScreen>
                         borderRadius: BorderRadius.circular(6),
                       ),
                       child: Text(
-                        incident.severity,
+                        severity,
                         style: TextStyle(
                           fontSize: 11,
                           fontWeight: FontWeight.w600,
@@ -369,7 +377,7 @@ class _IncidentsScreenState extends State<IncidentsScreen>
                 ),
                 const SizedBox(height: 12),
                 Text(
-                  incident.description,
+                  'Value: $value • Anomaly Score: $anomalyScore',
                   style: TextStyle(
                     fontSize: 14,
                     color: Colors.grey.shade600,
@@ -385,7 +393,7 @@ class _IncidentsScreenState extends State<IncidentsScreen>
                     ),
                     const SizedBox(width: 4),
                     Text(
-                      incident.time,
+                      timeAgo,
                       style: TextStyle(
                         fontSize: 12,
                         color: Colors.grey.shade500,
@@ -398,15 +406,15 @@ class _IncidentsScreenState extends State<IncidentsScreen>
                         vertical: 4,
                       ),
                       decoration: BoxDecoration(
-                        color: _getStatusColor(incident.status),
+                        color: AppTheme.errorColor.withOpacity(0.1),
                         borderRadius: BorderRadius.circular(12),
                       ),
-                      child: Text(
-                        incident.status,
-                        style: const TextStyle(
+                      child: const Text(
+                        'Open',
+                        style: TextStyle(
                           fontSize: 11,
                           fontWeight: FontWeight.w600,
-                          color: Colors.white,
+                          color: AppTheme.errorColor,
                         ),
                       ),
                     ),
@@ -419,37 +427,4 @@ class _IncidentsScreenState extends State<IncidentsScreen>
       ),
     );
   }
-
-  Color _getStatusColor(String status) {
-    switch (status) {
-      case 'Open':
-        return AppTheme.errorColor;
-      case 'In Progress':
-        return AppTheme.warningColor;
-      case 'Resolved':
-        return AppTheme.successColor;
-      case 'Closed':
-        return Colors.grey;
-      default:
-        return Colors.grey;
-    }
-  }
-}
-
-class _Incident {
-  final String id;
-  final String title;
-  final String description;
-  final String severity;
-  final String time;
-  final String status;
-
-  _Incident({
-    required this.id,
-    required this.title,
-    required this.description,
-    required this.severity,
-    required this.time,
-    required this.status,
-  });
 }

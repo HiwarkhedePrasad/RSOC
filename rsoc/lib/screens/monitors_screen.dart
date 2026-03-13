@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import '../theme/app_theme.dart';
+import '../services/api_service.dart';
 
 class MonitorsScreen extends StatefulWidget {
   const MonitorsScreen({super.key});
@@ -9,8 +10,69 @@ class MonitorsScreen extends StatefulWidget {
 }
 
 class _MonitorsScreenState extends State<MonitorsScreen> {
+  List<dynamic> _zones = [];
+  bool _isLoading = true;
+  String? _error;
+
+  @override
+  void initState() {
+    super.initState();
+    _loadZones();
+  }
+
+  Future<void> _loadZones() async {
+    try {
+      setState(() {
+        _isLoading = true;
+        _error = null;
+      });
+      final data = await ApiService.fetchZones();
+      setState(() {
+        _zones = data;
+        _isLoading = false;
+      });
+    } catch (e) {
+      setState(() {
+        _error = 'Failed to load zones: $e';
+        _isLoading = false;
+      });
+    }
+  }
+
+  Color _getStatusColor(String status) {
+    switch (status) {
+      case 'good':
+        return AppTheme.successColor;
+      case 'warning':
+        return AppTheme.warningColor;
+      case 'critical':
+        return AppTheme.errorColor;
+      default:
+        return Colors.grey;
+    }
+  }
+
+  String _getStatusText(String status) {
+    switch (status) {
+      case 'good':
+        return 'Good';
+      case 'warning':
+        return 'Warning';
+      case 'critical':
+        return 'Critical';
+      default:
+        return 'Unknown';
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+
+    int goodCount = _zones.where((z) => z['status'] == 'good').length;
+    int warningCount = _zones.where((z) => z['status'] == 'warning').length;
+    int criticalCount = _zones.where((z) => z['status'] == 'critical').length;
+
     return Scaffold(
       body: SafeArea(
         child: Column(
@@ -32,7 +94,7 @@ class _MonitorsScreenState extends State<MonitorsScreen> {
                     mainAxisAlignment: MainAxisAlignment.spaceBetween,
                     children: [
                       const Text(
-                        'Security Monitors',
+                        'City Zones',
                         style: TextStyle(
                           fontSize: 24,
                           fontWeight: FontWeight.w700,
@@ -72,20 +134,20 @@ class _MonitorsScreenState extends State<MonitorsScreen> {
                   Row(
                     children: [
                       _buildSummaryChip(
-                        'All Active',
-                        '24',
+                        'Good',
+                        goodCount.toString(),
                         AppTheme.successColor,
                       ),
                       const SizedBox(width: 12),
                       _buildSummaryChip(
                         'Warnings',
-                        '3',
+                        warningCount.toString(),
                         AppTheme.warningColor,
                       ),
                       const SizedBox(width: 12),
                       _buildSummaryChip(
-                        'Errors',
-                        '1',
+                        'Critical',
+                        criticalCount.toString(),
                         AppTheme.errorColor,
                       ),
                     ],
@@ -96,87 +158,49 @@ class _MonitorsScreenState extends State<MonitorsScreen> {
 
             // Monitors Grid
             Expanded(
-              child: Padding(
-                padding: const EdgeInsets.all(16),
-                child: GridView.builder(
-                  gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
-                    crossAxisCount: 2,
-                    childAspectRatio: 0.85,
-                    crossAxisSpacing: 12,
-                    mainAxisSpacing: 12,
-                  ),
-                  itemCount: 8,
-                  itemBuilder: (context, index) {
-                    final monitors = [
-                      _Monitor(
-                        name: 'Network Firewall',
-                        type: 'Security',
-                        status: 'Active',
-                        uptime: '99.9%',
-                        icon: Icons.security,
-                        color: AppTheme.primaryColor,
-                      ),
-                      _Monitor(
-                        name: 'Endpoint Protection',
-                        type: 'Antivirus',
-                        status: 'Active',
-                        uptime: '99.7%',
-                        icon: Icons.shield,
-                        color: AppTheme.secondaryColor,
-                      ),
-                      _Monitor(
-                        name: 'Intrusion Detection',
-                        type: 'IDS/IPS',
-                        status: 'Warning',
-                        uptime: '98.5%',
-                        icon: Icons.remove_red_eye,
-                        color: AppTheme.warningColor,
-                      ),
-                      _Monitor(
-                        name: 'SIEM Collector',
-                        type: 'Logging',
-                        status: 'Active',
-                        uptime: '99.9%',
-                        icon: Icons.assessment,
-                        color: AppTheme.accentColor,
-                      ),
-                      _Monitor(
-                        name: 'Email Gateway',
-                        type: 'Email Security',
-                        status: 'Active',
-                        uptime: '99.8%',
-                        icon: Icons.email,
-                        color: AppTheme.primaryColor,
-                      ),
-                      _Monitor(
-                        name: 'Web Proxy',
-                        type: 'Web Filter',
-                        status: 'Error',
-                        uptime: '95.2%',
-                        icon: Icons.language,
-                        color: AppTheme.errorColor,
-                      ),
-                      _Monitor(
-                        name: 'VPN Gateway',
-                        type: 'Remote Access',
-                        status: 'Active',
-                        uptime: '99.6%',
-                        icon: Icons.vpn_key,
-                        color: AppTheme.secondaryColor,
-                      ),
-                      _Monitor(
-                        name: 'DLP Service',
-                        type: 'Data Protection',
-                        status: 'Active',
-                        uptime: '99.4%',
-                        icon: Icons.lock,
-                        color: AppTheme.primaryColor,
-                      ),
-                    ];
-                    return _buildMonitorCard(monitors[index]);
-                  },
-                ),
-              ),
+              child: _isLoading
+                  ? const Center(child: CircularProgressIndicator())
+                  : _error != null
+                      ? Center(
+                          child: Column(
+                            mainAxisAlignment: MainAxisAlignment.center,
+                            children: [
+                              Icon(Icons.error_outline,
+                                  color: AppTheme.errorColor, size: 48),
+                              const SizedBox(height: 16),
+                              Text(
+                                _error!,
+                                textAlign: TextAlign.center,
+                                style: TextStyle(color: AppTheme.errorColor),
+                              ),
+                              const SizedBox(height: 16),
+                              ElevatedButton(
+                                onPressed: _loadZones,
+                                child: const Text('Retry'),
+                              ),
+                            ],
+                          ),
+                        )
+                      : RefreshIndicator(
+                          onRefresh: _loadZones,
+                          child: Padding(
+                            padding: const EdgeInsets.all(16),
+                            child: GridView.builder(
+                              gridDelegate:
+                                  const SliverGridDelegateWithFixedCrossAxisCount(
+                                crossAxisCount: 2,
+                                childAspectRatio: 0.85,
+                                crossAxisSpacing: 12,
+                                mainAxisSpacing: 12,
+                              ),
+                              itemCount: _zones.length,
+                              itemBuilder: (context, index) {
+                                final zone = _zones[index];
+                                return _buildZoneCard(zone);
+                              },
+                            ),
+                          ),
+                        ),
             ),
           ],
         ),
@@ -219,17 +243,39 @@ class _MonitorsScreenState extends State<MonitorsScreen> {
     );
   }
 
-  Widget _buildMonitorCard(_Monitor monitor) {
-    Color statusColor;
-    switch (monitor.status) {
-      case 'Active':
-        statusColor = AppTheme.successColor;
-      case 'Warning':
-        statusColor = AppTheme.warningColor;
-      case 'Error':
-        statusColor = AppTheme.errorColor;
+  Widget _buildZoneCard(dynamic zone) {
+    final zoneName = zone['zone_name'] as String? ?? 'Unknown';
+    final zoneType = zone['zone_type'] as String? ?? 'unknown';
+    final healthScore = (zone['health_score'] as num? ?? 0).round();
+    final status = zone['status'] as String? ?? 'unknown';
+    final hasAlert = zone['has_alert'] as bool? ?? false;
+
+    final statusColor = _getStatusColor(status);
+    final statusText = _getStatusText(status);
+
+    // Determine icon based on zone type
+    IconData zoneIcon;
+    Color zoneColor;
+    switch (zoneType) {
+      case 'commercial':
+        zoneIcon = Icons.business;
+        zoneColor = AppTheme.primaryColor;
+        break;
+      case 'industrial':
+        zoneIcon = Icons.factory;
+        zoneColor = AppTheme.warningColor;
+        break;
+      case 'residential':
+        zoneIcon = Icons.home;
+        zoneColor = AppTheme.successColor;
+        break;
+      case 'educational':
+        zoneIcon = Icons.school;
+        zoneColor = AppTheme.accentColor;
+        break;
       default:
-        statusColor = Colors.grey;
+        zoneIcon = Icons.location_city;
+        zoneColor = AppTheme.primaryColor;
     }
 
     return Container(
@@ -237,14 +283,14 @@ class _MonitorsScreenState extends State<MonitorsScreen> {
         borderRadius: BorderRadius.circular(16),
         gradient: LinearGradient(
           colors: [
-            monitor.color.withOpacity(0.1),
-            monitor.color.withOpacity(0.05),
+            zoneColor.withOpacity(0.1),
+            zoneColor.withOpacity(0.05),
           ],
           begin: Alignment.topLeft,
           end: Alignment.bottomRight,
         ),
         border: Border.all(
-          color: monitor.color.withOpacity(0.2),
+          color: zoneColor.withOpacity(0.2),
         ),
       ),
       child: Card(
@@ -261,12 +307,12 @@ class _MonitorsScreenState extends State<MonitorsScreen> {
                   Container(
                     padding: const EdgeInsets.all(10),
                     decoration: BoxDecoration(
-                      color: monitor.color.withOpacity(0.2),
+                      color: zoneColor.withOpacity(0.2),
                       borderRadius: BorderRadius.circular(12),
                     ),
                     child: Icon(
-                      monitor.icon,
-                      color: monitor.color,
+                      zoneIcon,
+                      color: zoneColor,
                       size: 24,
                     ),
                   ),
@@ -289,7 +335,7 @@ class _MonitorsScreenState extends State<MonitorsScreen> {
               ),
               const SizedBox(height: 16),
               Text(
-                monitor.name,
+                zoneName,
                 style: const TextStyle(
                   fontSize: 15,
                   fontWeight: FontWeight.w600,
@@ -299,7 +345,7 @@ class _MonitorsScreenState extends State<MonitorsScreen> {
               ),
               const SizedBox(height: 4),
               Text(
-                monitor.type,
+                zoneType[0].toUpperCase() + zoneType.substring(1),
                 style: TextStyle(
                   fontSize: 12,
                   color: Colors.grey.shade500,
@@ -315,17 +361,18 @@ class _MonitorsScreenState extends State<MonitorsScreen> {
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
                       Text(
-                        'Uptime',
+                        'Health',
                         style: TextStyle(
                           fontSize: 11,
                           color: Colors.grey.shade500,
                         ),
                       ),
                       Text(
-                        monitor.uptime,
-                        style: const TextStyle(
+                        '$healthScore',
+                        style: TextStyle(
                           fontSize: 14,
                           fontWeight: FontWeight.w600,
+                          color: statusColor,
                         ),
                       ),
                     ],
@@ -340,7 +387,7 @@ class _MonitorsScreenState extends State<MonitorsScreen> {
                       borderRadius: BorderRadius.circular(8),
                     ),
                     child: Text(
-                      monitor.status,
+                      statusText,
                       style: TextStyle(
                         fontSize: 11,
                         fontWeight: FontWeight.w600,
@@ -356,22 +403,4 @@ class _MonitorsScreenState extends State<MonitorsScreen> {
       ),
     );
   }
-}
-
-class _Monitor {
-  final String name;
-  final String type;
-  final String status;
-  final String uptime;
-  final IconData icon;
-  final Color color;
-
-  _Monitor({
-    required this.name,
-    required this.type,
-    required this.status,
-    required this.uptime,
-    required this.icon,
-    required this.color,
-  });
 }
