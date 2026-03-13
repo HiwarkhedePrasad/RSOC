@@ -1,0 +1,1315 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>NexaCity — Alert Feed + Water Control</title>
+<link href="https://fonts.googleapis.com/css2?family=Bebas+Neue&family=IBM+Plex+Mono:wght@400;500;600&family=Outfit:wght@300;400;600;700;900&display=swap" rel="stylesheet">
+<style>
+:root {
+  --bg: #06090f;
+  --surface1: #0c1118;
+  --surface2: #111820;
+  --surface3: #162030;
+  --border: #1c2d42;
+  --border-strong: #2a3d55;
+  --text: #dce8f5;
+  --muted: #4a6480;
+  --disabled: #243650;
+  --cyan: #00e5ff;
+  --cyan-dim: rgba(0,229,255,0.12);
+  --purple: #a855f7;
+  --purple-dim: rgba(168,85,247,0.12);
+  --green: #00ff88;
+  --green-dim: rgba(0,255,136,0.10);
+  --yellow: #ffd60a;
+  --yellow-dim: rgba(255,214,10,0.10);
+  --red: #ff3b3b;
+  --red-dim: rgba(255,59,59,0.10);
+  --water: #00b4d8;
+  --water-dim: rgba(0,180,216,0.12);
+  --font-sans: 'Outfit', sans-serif;
+  --font-mono: 'IBM Plex Mono', monospace;
+  --font-display: 'Bebas Neue', cursive;
+  --r-sm: 6px;
+  --r-md: 10px;
+  --r-lg: 14px;
+  --ease: cubic-bezier(.22,1,.36,1);
+}
+
+* { box-sizing: border-box; margin: 0; padding: 0; }
+
+body {
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--font-sans);
+  height: 100vh;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+
+/* ─── NAV ─────────────────────────────────── */
+.nav {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  padding: 10px 20px;
+  border-bottom: 1px solid var(--border);
+  background: var(--surface1);
+  flex-shrink: 0;
+}
+.logo {
+  font-family: var(--font-display);
+  font-size: 22px;
+  letter-spacing: 2px;
+  color: var(--cyan);
+}
+.nav-badge {
+  background: var(--red-dim);
+  border: 1px solid var(--red);
+  border-radius: 20px;
+  padding: 2px 10px;
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--red);
+  font-family: var(--font-mono);
+  letter-spacing: 1px;
+  margin-left: auto;
+}
+.live-pill {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 2px;
+  color: var(--green);
+}
+.pulse {
+  width: 7px; height: 7px;
+  border-radius: 50%;
+  background: var(--green);
+  box-shadow: 0 0 0 0 rgba(0,255,136,0.5);
+  animation: pulse 2s infinite;
+}
+@keyframes pulse {
+  0%   { box-shadow: 0 0 0 0 rgba(0,255,136,0.5); }
+  70%  { box-shadow: 0 0 0 7px rgba(0,255,136,0); }
+  100% { box-shadow: 0 0 0 0 rgba(0,255,136,0); }
+}
+
+/* ─── MAIN LAYOUT ─────────────────────────── */
+.main {
+  display: flex;
+  flex: 1;
+  overflow: hidden;
+}
+
+/* ─── ALERT PANEL ─────────────────────────── */
+.alert-panel {
+  width: 380px;
+  flex-shrink: 0;
+  border-right: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  background: var(--surface1);
+}
+
+.panel-header {
+  padding: 16px 20px;
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+}
+.panel-title {
+  font-family: var(--font-display);
+  font-size: 18px;
+  letter-spacing: 2px;
+  color: var(--cyan);
+  margin-bottom: 10px;
+}
+.stat-row {
+  display: flex;
+  gap: 8px;
+}
+.stat-chip {
+  flex: 1;
+  text-align: center;
+  background: var(--surface2);
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+  padding: 6px 8px;
+}
+.stat-val {
+  font-family: var(--font-mono);
+  font-size: 20px;
+  font-weight: 700;
+  line-height: 1;
+}
+.stat-lbl {
+  font-size: 9px;
+  color: var(--muted);
+  letter-spacing: 1.5px;
+  text-transform: uppercase;
+  margin-top: 3px;
+}
+.stat-chip.crit .stat-val { color: var(--red); }
+.stat-chip.warn .stat-val { color: var(--yellow); }
+.stat-chip.water .stat-val { color: var(--water); }
+
+/* filters */
+.filter-row {
+  display: flex;
+  gap: 6px;
+  padding: 10px 20px;
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+}
+.filter-btn {
+  background: var(--surface2);
+  border: 1px solid var(--border);
+  border-radius: 20px;
+  padding: 4px 12px;
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--muted);
+  cursor: pointer;
+  transition: all .2s var(--ease);
+  letter-spacing: 0.5px;
+}
+.filter-btn:hover { border-color: var(--cyan); color: var(--cyan); }
+.filter-btn.active { border-color: var(--cyan); background: var(--cyan-dim); color: var(--cyan); }
+.filter-btn.water-filter.active { border-color: var(--water); background: var(--water-dim); color: var(--water); }
+
+/* alert list */
+.alert-list {
+  flex: 1;
+  overflow-y: auto;
+  padding: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.alert-list::-webkit-scrollbar { width: 4px; }
+.alert-list::-webkit-scrollbar-track { background: transparent; }
+.alert-list::-webkit-scrollbar-thumb { background: var(--border-strong); border-radius: 2px; }
+
+/* ── ALERT CARD ── */
+.alert-card {
+  border-radius: var(--r-md);
+  padding: 12px 14px;
+  cursor: pointer;
+  position: relative;
+  overflow: hidden;
+  transition: transform .2s var(--ease), border-color .2s var(--ease), box-shadow .2s var(--ease);
+  border: 1px solid transparent;
+  /* Smooth entrance — no flicker */
+  opacity: 0;
+  transform: translateX(-12px);
+  animation: cardIn .35s var(--ease) forwards;
+}
+@keyframes cardIn {
+  to { opacity: 1; transform: translateX(0); }
+}
+
+.alert-card.critical {
+  background: var(--red-dim);
+  border-left: 3px solid var(--red);
+}
+.alert-card.warning {
+  background: var(--yellow-dim);
+  border-left: 3px solid var(--yellow);
+}
+.alert-card.water-alert {
+  background: var(--water-dim);
+  border-left: 3px solid var(--water);
+}
+.alert-card:hover {
+  transform: translateX(4px);
+  box-shadow: 0 4px 20px rgba(0,0,0,0.4);
+}
+.alert-card.active {
+  border: 1px solid var(--cyan) !important;
+  border-left: 3px solid var(--cyan) !important;
+  box-shadow: 0 0 20px rgba(0,229,255,0.1);
+}
+.alert-card.water-alert.active {
+  border: 1px solid var(--water) !important;
+  border-left: 3px solid var(--water) !important;
+  box-shadow: 0 0 20px rgba(0,180,216,0.15);
+}
+
+.alert-top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 6px;
+}
+.alert-zone {
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--text);
+}
+.alert-badge {
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 1.5px;
+  text-transform: uppercase;
+  padding: 2px 8px;
+  border-radius: 20px;
+  border: 1px solid;
+}
+.alert-badge.critical { color: var(--red); border-color: var(--red); background: rgba(255,59,59,0.1); }
+.alert-badge.warning  { color: var(--yellow); border-color: var(--yellow); background: rgba(255,214,10,0.1); }
+.alert-badge.water    { color: var(--water); border-color: var(--water); background: rgba(0,180,216,0.1); }
+
+.alert-msg { font-size: 12px; color: var(--muted); line-height: 1.4; margin-bottom: 6px; }
+.alert-meta {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+.alert-time { font-size: 10px; color: var(--disabled); font-family: var(--font-mono); }
+.alert-metric { font-size: 10px; font-family: var(--font-mono); color: var(--cyan); }
+
+/* water click hint */
+.water-hint {
+  font-size: 10px;
+  color: var(--water);
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  margin-top: 4px;
+  font-weight: 600;
+}
+.water-hint::before { content: '💧'; }
+
+/* ─── RIGHT PANEL ─────────────────────────── */
+.right-panel {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+/* ── WATER MAP VIEW ── */
+.water-view {
+  flex: 1;
+  display: none;
+  flex-direction: column;
+  padding: 20px;
+  overflow: hidden;
+}
+.water-view.visible { display: flex; }
+
+.water-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  margin-bottom: 16px;
+  flex-shrink: 0;
+}
+.water-title-block {}
+.water-title {
+  font-family: var(--font-display);
+  font-size: 26px;
+  letter-spacing: 2px;
+  color: var(--water);
+  line-height: 1;
+}
+.water-subtitle {
+  font-size: 11px;
+  color: var(--muted);
+  letter-spacing: 1px;
+  margin-top: 4px;
+}
+
+/* Controls */
+.water-controls {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+.shutoff-btn {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 18px;
+  border-radius: var(--r-md);
+  border: none;
+  cursor: pointer;
+  font-family: var(--font-sans);
+  font-size: 13px;
+  font-weight: 700;
+  letter-spacing: 0.5px;
+  transition: all .25s var(--ease);
+  position: relative;
+  overflow: hidden;
+}
+.shutoff-btn.stop {
+  background: linear-gradient(135deg, #c0392b, var(--red));
+  color: white;
+  box-shadow: 0 4px 20px rgba(255,59,59,0.3);
+}
+.shutoff-btn.stop:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 6px 25px rgba(255,59,59,0.5);
+}
+.shutoff-btn.restore {
+  background: linear-gradient(135deg, #0a7a4e, var(--green));
+  color: #001a0d;
+  box-shadow: 0 4px 20px rgba(0,255,136,0.2);
+}
+.shutoff-btn.restore:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 6px 25px rgba(0,255,136,0.4);
+}
+.shutoff-btn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+  transform: none !important;
+  box-shadow: none !important;
+}
+
+.close-water-btn {
+  background: var(--surface2);
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+  color: var(--muted);
+  font-size: 18px;
+  width: 34px;
+  height: 34px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: all .2s;
+}
+.close-water-btn:hover { border-color: var(--border-strong); color: var(--text); }
+
+/* Water stats row */
+.water-stats {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 10px;
+  margin-bottom: 16px;
+  flex-shrink: 0;
+}
+.wstat {
+  background: var(--surface1);
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  padding: 12px;
+  text-align: center;
+  position: relative;
+  overflow: hidden;
+  transition: all .3s var(--ease);
+}
+.wstat::before {
+  content: '';
+  position: absolute;
+  top: 0; left: 0; right: 0;
+  height: 2px;
+  background: var(--water);
+  transform: scaleX(0);
+  transition: transform .5s var(--ease);
+}
+.wstat.alert-active::before { transform: scaleX(1); background: var(--red); }
+.wstat.shutoff-active::before { transform: scaleX(1); background: var(--green); }
+.wstat-label { font-size: 9px; color: var(--muted); letter-spacing: 1.5px; text-transform: uppercase; margin-bottom: 4px; }
+.wstat-val {
+  font-family: var(--font-mono);
+  font-size: 20px;
+  font-weight: 700;
+  color: var(--water);
+  transition: color .5s;
+}
+.wstat-val.danger { color: var(--red); }
+.wstat-val.safe { color: var(--green); }
+.wstat-unit { font-size: 10px; color: var(--muted); margin-top: 2px; }
+
+/* Alert status bar */
+.water-status-bar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 14px;
+  border-radius: var(--r-md);
+  border: 1px solid;
+  margin-bottom: 14px;
+  font-size: 12px;
+  font-weight: 600;
+  transition: all .4s var(--ease);
+  flex-shrink: 0;
+}
+.water-status-bar.active-leak {
+  background: rgba(255,59,59,0.08);
+  border-color: var(--red);
+  color: var(--red);
+}
+.water-status-bar.shutoff {
+  background: rgba(0,255,136,0.06);
+  border-color: var(--green);
+  color: var(--green);
+}
+.status-icon { font-size: 16px; }
+.status-saved {
+  margin-left: auto;
+  font-family: var(--font-mono);
+  font-size: 11px;
+}
+
+/* ── PIPE NETWORK MAP ── */
+.pipe-map-wrap {
+  flex: 1;
+  background: var(--surface1);
+  border: 1px solid var(--border);
+  border-radius: var(--r-lg);
+  position: relative;
+  overflow: hidden;
+  min-height: 0;
+}
+
+.pipe-map-title {
+  position: absolute;
+  top: 12px;
+  left: 14px;
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 2px;
+  text-transform: uppercase;
+  color: var(--muted);
+  z-index: 2;
+}
+
+canvas#pipe-canvas {
+  width: 100%;
+  height: 100%;
+  display: block;
+}
+
+/* Shutoff overlay */
+.shutoff-overlay {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(0,255,136,0.04);
+  border-radius: var(--r-lg);
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity .5s var(--ease);
+  z-index: 10;
+}
+.shutoff-overlay.visible { opacity: 1; }
+.shutoff-stamp {
+  font-family: var(--font-display);
+  font-size: 52px;
+  letter-spacing: 6px;
+  color: var(--green);
+  text-shadow: 0 0 40px rgba(0,255,136,0.5);
+  border: 4px solid var(--green);
+  padding: 10px 30px;
+  border-radius: var(--r-md);
+  opacity: 0.85;
+  transform: rotate(-8deg);
+  margin-bottom: 30%;
+}
+
+/* ── EMPTY STATE ── */
+.empty-state {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  color: var(--muted);
+  gap: 10px;
+  padding: 40px;
+}
+.empty-state.hidden { display: none; }
+.empty-icon { font-size: 48px; opacity: 0.4; }
+.empty-text { font-size: 13px; text-align: center; line-height: 1.6; }
+
+/* ── ALERT COUNT BADGE (smooth) ── */
+.count-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 20px;
+  height: 20px;
+  background: var(--red-dim);
+  border: 1px solid var(--red);
+  border-radius: 10px;
+  font-size: 10px;
+  font-weight: 700;
+  color: var(--red);
+  font-family: var(--font-mono);
+  padding: 0 5px;
+  transition: transform .3s var(--ease), opacity .3s;
+}
+
+/* Scanlines */
+.scanlines {
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  z-index: 1000;
+  background: repeating-linear-gradient(0deg,transparent,transparent 2px,rgba(0,0,0,.025) 2px,rgba(0,0,0,.025) 4px);
+}
+
+/* Dispatch confirmation toast */
+.toast {
+  position: fixed;
+  bottom: 20px;
+  right: 20px;
+  padding: 12px 18px;
+  border-radius: var(--r-md);
+  font-size: 13px;
+  font-weight: 600;
+  border: 1px solid;
+  z-index: 9999;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  opacity: 0;
+  transform: translateY(10px);
+  transition: all .3s var(--ease);
+  pointer-events: none;
+}
+.toast.show { opacity: 1; transform: translateY(0); }
+.toast.success { background: rgba(0,255,136,0.08); border-color: var(--green); color: var(--green); }
+.toast.info    { background: rgba(0,229,255,0.08); border-color: var(--cyan); color: var(--cyan); }
+
+/* ── WATER FLOW RATE CHART ── */
+.flow-chart-bar {
+  display: flex;
+  align-items: flex-end;
+  gap: 3px;
+  height: 40px;
+  margin-top: 6px;
+}
+.flow-bar {
+  flex: 1;
+  border-radius: 2px 2px 0 0;
+  background: var(--water);
+  transition: height .4s var(--ease), background .4s;
+  min-height: 2px;
+}
+.flow-bar.spike { background: var(--red); }
+.flow-bar.stopped { background: var(--green); opacity: 0.5; }
+</style>
+</head>
+<body>
+<div class="scanlines"></div>
+
+<!-- NAV -->
+<nav class="nav">
+  <div class="logo">NEXA<em>CITY</em></div>
+  <div style="font-size:11px;color:var(--muted);letter-spacing:1px">NAGPUR URBAN INTELLIGENCE — ALERT MONITOR</div>
+  <div class="nav-badge">🚨 LIVE FEED</div>
+  <div class="live-pill"><div class="pulse"></div> LIVE</div>
+</nav>
+
+<!-- MAIN -->
+<div class="main">
+
+  <!-- LEFT: ALERT PANEL -->
+  <div class="alert-panel">
+    <div class="panel-header">
+      <div class="panel-title">LIVE ALERT FEED</div>
+      <div class="stat-row">
+        <div class="stat-chip crit">
+          <div class="stat-val" id="stat-total">0</div>
+          <div class="stat-lbl">Total</div>
+        </div>
+        <div class="stat-chip crit">
+          <div class="stat-val" id="stat-crit">0</div>
+          <div class="stat-lbl">Critical</div>
+        </div>
+        <div class="stat-chip warn">
+          <div class="stat-val" id="stat-warn">0</div>
+          <div class="stat-lbl">Warning</div>
+        </div>
+        <div class="stat-chip water">
+          <div class="stat-val" id="stat-water">0</div>
+          <div class="stat-lbl">Water</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Filter row -->
+    <div class="filter-row">
+      <button class="filter-btn active" data-filter="all" onclick="setFilter('all',this)">All</button>
+      <button class="filter-btn" data-filter="critical" onclick="setFilter('critical',this)">Critical</button>
+      <button class="filter-btn" data-filter="warning" onclick="setFilter('warning',this)">Warning</button>
+      <button class="filter-btn water-filter" data-filter="water" onclick="setFilter('water',this)">💧 Water</button>
+    </div>
+
+    <div class="alert-list" id="alert-list"></div>
+  </div>
+
+  <!-- RIGHT: DYNAMIC PANEL -->
+  <div class="right-panel">
+
+    <!-- Empty state -->
+    <div class="empty-state" id="empty-state">
+      <div class="empty-icon">📡</div>
+      <div class="empty-text">Select an alert to view details.<br>Click any <strong style="color:var(--water)">💧 Water</strong> alert to open the pipe network simulation and take direct action.</div>
+    </div>
+
+    <!-- Water Map View -->
+    <div class="water-view" id="water-view">
+      <div class="water-header">
+        <div class="water-title-block">
+          <div class="water-title">💧 WATER NETWORK MAP</div>
+          <div class="water-subtitle" id="water-zone-name">Zone — Pipe Simulation Active</div>
+        </div>
+        <div class="water-controls">
+          <button class="shutoff-btn stop" id="shutoff-btn" onclick="executeShutoff()">
+            🚰 STOP WATER SUPPLY
+          </button>
+          <button class="shutoff-btn restore" id="restore-btn" onclick="restoreWater()" style="display:none">
+            ✅ RESTORE SUPPLY
+          </button>
+          <button class="close-water-btn" onclick="closeWaterView()">✕</button>
+        </div>
+      </div>
+
+      <!-- Status bar -->
+      <div class="water-status-bar active-leak" id="water-status-bar">
+        <span class="status-icon">⚠️</span>
+        <span id="status-text">ANOMALOUS FLOW DETECTED — Pipe leak suspected. Immediate shutoff recommended.</span>
+        <span class="status-saved" id="status-saved"></span>
+      </div>
+
+      <!-- Stats -->
+      <div class="water-stats">
+        <div class="wstat" id="wstat-flow">
+          <div class="wstat-label">Current Flow</div>
+          <div class="wstat-val danger" id="ws-flow">--</div>
+          <div class="wstat-unit">L / hr</div>
+        </div>
+        <div class="wstat" id="wstat-normal">
+          <div class="wstat-label">Normal Range</div>
+          <div class="wstat-val" id="ws-normal">--</div>
+          <div class="wstat-unit">L / hr</div>
+        </div>
+        <div class="wstat" id="wstat-excess">
+          <div class="wstat-label">Excess Flow</div>
+          <div class="wstat-val danger" id="ws-excess">--</div>
+          <div class="wstat-unit">+L / hr</div>
+        </div>
+        <div class="wstat" id="wstat-saved">
+          <div class="wstat-label">Water Saved</div>
+          <div class="wstat-val" id="ws-saved">0</div>
+          <div class="wstat-unit">Litres</div>
+        </div>
+      </div>
+
+      <!-- Pipe map -->
+      <div class="pipe-map-wrap">
+        <div class="pipe-map-title">PIPE NETWORK SIMULATION — REAL-TIME</div>
+        <canvas id="pipe-canvas"></canvas>
+        <div class="shutoff-overlay" id="shutoff-overlay">
+          <div class="shutoff-stamp">LOCAL ISOLATION</div>
+        </div>
+      </div>
+    </div>
+
+  </div>
+</div>
+
+<!-- Toast -->
+<div class="toast" id="toast"></div>
+
+<script>
+// ─────────────────────────────────────────────
+//  SYNTHETIC DATA
+// ─────────────────────────────────────────────
+const ZONES = [
+  { id:'Z1', name:'Sitabuldi',      type:'commercial',  lat:21.1444, lon:79.0832 },
+  { id:'Z2', name:'Gandhibagh',     type:'mixed',       lat:21.1528, lon:79.1026 },
+  { id:'Z3', name:'Dharampeth',     type:'residential', lat:21.1399, lon:79.0607 },
+  { id:'Z4', name:'Sadar',          type:'mixed',       lat:21.1610, lon:79.0760 },
+  { id:'Z5', name:'MIDC Hingna',    type:'industrial',  lat:21.0963, lon:78.9839 },
+  { id:'Z6', name:'Kamptee Road',   type:'commercial',  lat:21.2000, lon:79.1200 },
+  { id:'Z7', name:'Manish Nagar',   type:'residential', lat:21.0931, lon:79.0617 },
+  { id:'Z8', name:'Wathoda',        type:'industrial',  lat:21.1458, lon:79.1350 },
+  { id:'Z9', name:'Seminary Hills', type:'educational', lat:21.1691, lon:79.0494 },
+  { id:'Z10',name:'Itwari',         type:'commercial',  lat:21.1517, lon:79.1132 },
+  { id:'Z11',name:'Lakadganj',      type:'mixed',       lat:21.1500, lon:79.1200 },
+  { id:'Z12',name:'Pardi',          type:'residential', lat:21.1561, lon:79.1417 },
+];
+
+// Pre-seeded alerts – stable list (no random regeneration = no flicker)
+const ALERT_SEED = [
+  { id:'a1', zone:'Z7', severity:'critical', type:'water', metric:'water_liters', value:5382, normal:1200, msg:'Abnormal pipe flow — 4.5× baseline. Suspected main leak on residential grid.', time:'03:14', ago:'2m ago' },
+  { id:'a2', zone:'Z2', severity:'critical', type:'aqi',   metric:'aqi',          value:287,  normal:100,  msg:'Industrial pollution spike. AQI 287 — Hazardous. Ventilation failure detected.', time:'02:47', ago:'5m ago' },
+  { id:'a3', zone:'Z1', severity:'critical', type:'energy',metric:'energy_kwh',   value:1840, normal:800,  msg:'Energy overload 2.2× during event. Circuit breaker stress detected.', time:'17:32', ago:'12m ago' },
+  { id:'a4', zone:'Z5', severity:'warning',  type:'water', metric:'water_liters', value:2100, normal:800,  msg:'Elevated industrial water consumption. Possible cooling system inefficiency.', time:'08:55', ago:'18m ago' },
+  { id:'a5', zone:'Z3', severity:'warning',  type:'traffic',metric:'traffic_index',value:78, normal:40,  msg:'Congestion building on residential arterials. Peak hour spillback.', time:'08:12', ago:'31m ago' },
+  { id:'a6', zone:'Z4', severity:'warning',  type:'energy',metric:'energy_kwh',   value:1120, normal:600,  msg:'Peak energy demand at cantonment grid. Load shedding risk moderate.', time:'18:00', ago:'45m ago' },
+  { id:'a7', zone:'Z8', severity:'warning',  type:'aqi',   metric:'aqi',          value:195,  normal:90,   msg:'Industrial zone AQI elevated. Downwind residential zones may be affected.', time:'14:20', ago:'1h ago' },
+  { id:'a8', zone:'Z6', severity:'warning',  type:'water', metric:'water_liters', value:1750, normal:800,  msg:'Commercial water use 2× norm. Check irrigation systems and rooftop tanks.', time:'06:40', ago:'1.5h ago' },
+];
+
+// State
+let currentFilter = 'all';
+let activeAlertId = null;
+let isShutoff = false;
+let savedLitres = 0;
+let savedInterval = null;
+let pipeAnim = null;
+let activeAlertData = null;
+
+// ─────────────────────────────────────────────
+//  RENDER ALERTS (called once, stable)
+// ─────────────────────────────────────────────
+function renderAlerts() {
+  const list = document.getElementById('alert-list');
+  const alerts = ALERT_SEED.filter(a =>
+    currentFilter === 'all' ||
+    (currentFilter === 'critical' && a.severity === 'critical') ||
+    (currentFilter === 'warning'  && a.severity === 'warning')  ||
+    (currentFilter === 'water'    && a.type === 'water')
+  );
+
+  // Animate out old cards, animate in new
+  // Instead of clearing innerHTML (which causes reflow flicker),
+  // we diff by id
+  const existing = Array.from(list.querySelectorAll('.alert-card')).map(el => el.dataset.id);
+  const incoming = alerts.map(a => a.id);
+
+  // Remove cards not in new list
+  existing.forEach(id => {
+    if (!incoming.includes(id)) {
+      const el = list.querySelector(`[data-id="${id}"]`);
+      if (el) {
+        el.style.opacity = '0';
+        el.style.transform = 'translateX(-12px)';
+        el.style.transition = 'all .25s ease';
+        setTimeout(() => el.remove(), 250);
+      }
+    }
+  });
+
+  // Add new cards
+  alerts.forEach((a, i) => {
+    if (!existing.includes(a.id)) {
+      const card = buildCard(a, i);
+      list.appendChild(card);
+    }
+  });
+
+  // Update stats (smooth, no blink)
+  const total  = ALERT_SEED.length;
+  const crits  = ALERT_SEED.filter(a => a.severity === 'critical').length;
+  const warns  = ALERT_SEED.filter(a => a.severity === 'warning').length;
+  const waters = ALERT_SEED.filter(a => a.type === 'water').length;
+
+  smoothCount('stat-total', total);
+  smoothCount('stat-crit',  crits);
+  smoothCount('stat-warn',  warns);
+  smoothCount('stat-water', waters);
+}
+
+// Build a single alert card DOM element
+function buildCard(a, delay) {
+  const isWater = a.type === 'water';
+  const div = document.createElement('div');
+  div.className = `alert-card ${a.severity} ${isWater ? 'water-alert' : ''}`;
+  div.dataset.id = a.id;
+  div.style.animationDelay = `${delay * 60}ms`;
+  div.onclick = () => selectAlert(a);
+
+  const badgeClass = isWater ? 'water' : a.severity;
+  const badgeLabel = isWater ? '💧 WATER' : a.severity.toUpperCase();
+  const metricLabel = formatMetric(a.metric, a.value);
+
+  div.innerHTML = `
+    <div class="alert-top">
+      <div class="alert-zone">${ZONES.find(z=>z.id===a.zone)?.name || a.zone} · ${a.zone}</div>
+      <div class="alert-badge ${badgeClass}">${badgeLabel}</div>
+    </div>
+    <div class="alert-msg">${a.msg}</div>
+    <div class="alert-meta">
+      <div class="alert-time">${a.time} · ${a.ago}</div>
+      <div class="alert-metric">${metricLabel}</div>
+    </div>
+    ${isWater ? '<div class="water-hint">Click to open Water Network Map</div>' : ''}
+  `;
+  return div;
+}
+
+function formatMetric(metric, value) {
+  if (metric === 'water_liters')  return `${value} L/hr`;
+  if (metric === 'aqi')           return `AQI ${value}`;
+  if (metric === 'energy_kwh')    return `${value} kWh`;
+  if (metric === 'traffic_index') return `Traffic ${value}/100`;
+  return `${value}`;
+}
+
+// ─────────────────────────────────────────────
+//  SMOOTH COUNTER (no 0→N flicker)
+// ─────────────────────────────────────────────
+const _counts = {};
+function smoothCount(id, target) {
+  const el = document.getElementById(id);
+  if (!el) return;
+  const prev = _counts[id] ?? (parseInt(el.textContent) || 0);
+  if (prev === target) return;
+  _counts[id] = target;
+  const duration = 400;
+  const start = performance.now();
+  const from = prev;
+  function step(now) {
+    const t = Math.min(1, (now - start) / duration);
+    const eased = 1 - Math.pow(1 - t, 3);
+    el.textContent = Math.round(from + (target - from) * eased);
+    if (t < 1) requestAnimationFrame(step);
+  }
+  requestAnimationFrame(step);
+}
+
+// ─────────────────────────────────────────────
+//  SELECT ALERT
+// ─────────────────────────────────────────────
+function selectAlert(alert) {
+  // Deselect previous
+  document.querySelectorAll('.alert-card').forEach(c => c.classList.remove('active'));
+  // Select new
+  const card = document.querySelector(`[data-id="${alert.id}"]`);
+  if (card) card.classList.add('active');
+  activeAlertId = alert.id;
+
+  if (alert.type === 'water') {
+    openWaterView(alert);
+  } else {
+    document.getElementById('empty-state').classList.remove('hidden');
+    document.getElementById('empty-state').querySelector('.empty-text').innerHTML =
+      `<strong style="color:var(--cyan)">${ZONES.find(z=>z.id===alert.zone)?.name}</strong><br>
+      Alert type: <em>${alert.metric.replace(/_/g,' ')}</em><br>
+      Value: <strong>${formatMetric(alert.metric, alert.value)}</strong><br><br>
+      <span style="color:var(--muted);font-size:11px">Water alerts support direct shutoff control.<br>Select a 💧 water alert to take action.</span>`;
+    document.getElementById('water-view').classList.remove('visible');
+    stopPipeAnim();
+  }
+}
+
+// ─────────────────────────────────────────────
+//  WATER VIEW
+// ─────────────────────────────────────────────
+function openWaterView(alert) {
+  activeAlertData = alert;
+  isShutoff = false;
+  savedLitres = 0;
+
+  document.getElementById('empty-state').classList.add('hidden');
+  const view = document.getElementById('water-view');
+  view.classList.add('visible');
+
+  // Zone name
+  const zone = ZONES.find(z => z.id === alert.zone);
+  document.getElementById('water-zone-name').textContent =
+    `${zone?.name} (${alert.zone}) · ${zone?.type?.toUpperCase()}`;
+
+  // Stats
+  const excess = alert.value - alert.normal;
+  document.getElementById('ws-flow').textContent   = alert.value.toLocaleString();
+  document.getElementById('ws-normal').textContent = alert.normal.toLocaleString();
+  document.getElementById('ws-excess').textContent = `+${excess.toLocaleString()}`;
+  document.getElementById('ws-saved').textContent  = '0';
+
+  // Color states
+  document.getElementById('ws-flow').className   = 'wstat-val danger';
+  document.getElementById('ws-excess').className = 'wstat-val danger';
+
+  // Status bar
+  setStatusActive();
+
+  // Buttons
+  document.getElementById('shutoff-btn').style.display = '';
+  document.getElementById('shutoff-btn').disabled = false;
+  document.getElementById('restore-btn').style.display = 'none';
+
+  // Shutoff overlay
+  document.getElementById('shutoff-overlay').classList.remove('visible');
+
+  // Start pipe simulation
+  stopPipeAnim();
+  setTimeout(() => startPipeAnim(alert, false), 50);
+
+  // Stop water saved counter if running
+  if (savedInterval) clearInterval(savedInterval);
+}
+
+function setStatusActive() {
+  const bar = document.getElementById('water-status-bar');
+  bar.className = 'water-status-bar active-leak';
+  document.getElementById('status-text').textContent =
+    'ANOMALOUS FLOW DETECTED — Pipe leak suspected. Immediate shutoff recommended.';
+  document.getElementById('status-saved').textContent = '';
+}
+
+function setStatusShutoff() {
+  const bar = document.getElementById('water-status-bar');
+  bar.className = 'water-status-bar shutoff';
+  document.getElementById('status-text').textContent =
+    'LEAK ISOLATED — Local valves closed. General supply nominal. Dispatch repair team.';
+}
+
+function closeWaterView() {
+  document.getElementById('water-view').classList.remove('visible');
+  document.getElementById('empty-state').classList.remove('hidden');
+  document.getElementById('empty-state').querySelector('.empty-text').innerHTML =
+    'Select an alert to view details.<br>Click any <strong style="color:var(--water)">💧 Water</strong> alert to open the pipe network simulation and take direct action.';
+  document.querySelectorAll('.alert-card').forEach(c => c.classList.remove('active'));
+  stopPipeAnim();
+  if (savedInterval) clearInterval(savedInterval);
+}
+
+// ─────────────────────────────────────────────
+//  SHUTOFF ACTIONS
+// ─────────────────────────────────────────────
+function executeShutoff() {
+  if (isShutoff || !activeAlertData) return;
+  isShutoff = true;
+
+  const btn = document.getElementById('shutoff-btn');
+  btn.disabled = true;
+  btn.textContent = '⏳ Cutting supply...';
+
+  setTimeout(() => {
+    // Update UI
+    btn.style.display = 'none';
+    document.getElementById('restore-btn').style.display = '';
+
+    // Overlay
+    document.getElementById('shutoff-overlay').classList.add('visible');
+
+    // Status
+    setStatusShutoff();
+
+    // Update stats
+    // The main flow should return to normal, not 0!
+    document.getElementById('ws-flow').textContent = activeAlertData.normal.toLocaleString();
+    document.getElementById('ws-flow').className = 'wstat-val safe';
+    document.getElementById('ws-excess').textContent = '0';
+    document.getElementById('ws-excess').className = 'wstat-val safe';
+
+    // Start saving counter
+    const ratePerSecond = Math.round(activeAlertData.value / 3600);
+    savedInterval = setInterval(() => {
+      savedLitres += ratePerSecond;
+      document.getElementById('ws-saved').textContent = savedLitres.toLocaleString();
+      document.getElementById('status-saved').textContent = `💾 ${savedLitres.toLocaleString()} L saved`;
+    }, 1000);
+
+    // Restart pipe anim as shutoff
+    stopPipeAnim();
+    setTimeout(() => startPipeAnim(activeAlertData, true), 50);
+
+    const zoneObj = ZONES.find(z => z.id === activeAlertData.zone);
+    const zName = zoneObj ? zoneObj.name : 'site';
+    showToast('success', `🚰 Local pipe isolated! Dispatch team dispatched to ${zName}.`);
+  }, 1200);
+}
+
+function restoreWater() {
+  if (!isShutoff) return;
+  isShutoff = false;
+  if (savedInterval) clearInterval(savedInterval);
+
+  document.getElementById('shutoff-overlay').classList.remove('visible');
+  document.getElementById('restore-btn').style.display = 'none';
+  document.getElementById('shutoff-btn').style.display = '';
+  document.getElementById('shutoff-btn').disabled = false;
+  document.getElementById('shutoff-btn').textContent = '🚰 STOP WATER SUPPLY';
+
+  // Reset stats
+  document.getElementById('ws-flow').textContent = activeAlertData.value.toLocaleString();
+  document.getElementById('ws-flow').className = 'wstat-val danger';
+  document.getElementById('ws-excess').textContent = `+${(activeAlertData.value - activeAlertData.normal).toLocaleString()}`;
+  document.getElementById('ws-excess').className = 'wstat-val danger';
+
+  setStatusActive();
+
+  stopPipeAnim();
+  setTimeout(() => startPipeAnim(activeAlertData, false), 50);
+
+  showToast('info', '♻️ Supply restored. Monitor closely for continued anomalies.');
+}
+
+// ─────────────────────────────────────────────
+//  PIPE NETWORK CANVAS SIMULATION
+// ─────────────────────────────────────────────
+function stopPipeAnim() {
+  if (pipeAnim) { cancelAnimationFrame(pipeAnim); pipeAnim = null; }
+}
+
+function startPipeAnim(alert, shutoff) {
+  const canvas = document.getElementById('pipe-canvas');
+  const wrap = canvas.parentElement;
+  canvas.width  = wrap.clientWidth;
+  canvas.height = wrap.clientHeight;
+  const W = canvas.width, H = canvas.height;
+  const ctx = canvas.getContext('2d');
+
+  // Build pipe graph: nodes + segments
+  // Dynamic Nagpur-themed node names
+  const zoneObj = ZONES.find(z => z.id === alert.zone);
+  const zName = zoneObj ? zoneObj.name : 'Unknown';
+  const prefix = zName.split(' ')[0]; // E.g., 'Sitabuldi', 'MIDC', 'Manish'
+
+  const nodes = [
+    { x: 0.12, y: 0.15, label: 'Gorewada WTP' },
+    { x: 0.35, y: 0.15, label: `${prefix} Main` },
+    { x: 0.60, y: 0.15, label: `${prefix} ESR 1` },
+    { x: 0.85, y: 0.15, label: `${prefix} ESR 2` },
+    { x: 0.12, y: 0.50, label: 'Sector A' },
+    { x: 0.35, y: 0.50, label: 'Sector B' },
+    { x: 0.60, y: 0.50, label: '⚠ LEAK', isLeak: true },
+    { x: 0.85, y: 0.50, label: 'Sector D' },
+    { x: 0.12, y: 0.82, label: 'Block 1' },
+    { x: 0.35, y: 0.82, label: 'Block 2' },
+    { x: 0.60, y: 0.82, label: 'Block 3' },
+    { x: 0.85, y: 0.82, label: 'Block 4' },
+  ];
+
+  const pipes = [
+    [0,1],[1,2],[2,3],          // top row
+    [0,4],[1,5],[2,6],[3,7],    // verticals
+    [4,5],[5,6],[6,7],          // mid row
+    [4,8],[5,9],[6,10],[7,11],  // lower verticals
+    [8,9],[9,10],[10,11],       // bottom row
+  ];
+
+  // Active pipes are pipes not connected to leak if shutoff is true
+  const activePipes = pipes.filter(([ai, bi]) => 
+    !(shutoff && (ai === 6 || bi === 6))
+  );
+
+  // Particles
+  const particles = [];
+  const PARTICLE_COUNT = 60; // Keep particles flowing!
+
+  function spawnParticles() {
+    for (let i = 0; i < PARTICLE_COUNT; i++) {
+      const pipe = activePipes[Math.floor(Math.random() * activePipes.length)];
+      particles.push({
+        pipe,
+        t: Math.random(),
+        speed: 0.003 + Math.random() * 0.005,
+        size: 2 + Math.random() * 2,
+        alpha: 0.5 + Math.random() * 0.5,
+      });
+    }
+  }
+  spawnParticles();
+
+  // Leak drip particles
+  const drips = [];
+  const leakNode = nodes[6];
+
+  function spawnDrip() {
+    if (!shutoff) {
+      drips.push({
+        x: leakNode.x * W,
+        y: leakNode.y * H,
+        vy: 1 + Math.random() * 2,
+        vx: (Math.random() - 0.5) * 1,
+        alpha: 1,
+        size: 3 + Math.random() * 3,
+      });
+    }
+  }
+
+  let frame = 0;
+  let lastDrip = 0;
+
+  function draw(ts) {
+    ctx.clearRect(0, 0, W, H);
+    frame++;
+
+    // Draw grid dots background
+    ctx.fillStyle = 'rgba(28,45,66,0.5)';
+    for (let gx = 30; gx < W; gx += 30) {
+      for (let gy = 30; gy < H; gy += 30) {
+        ctx.beginPath();
+        ctx.arc(gx, gy, 1, 0, Math.PI*2);
+        ctx.fill();
+      }
+    }
+
+    // Draw pipes
+    pipes.forEach(([ai, bi]) => {
+      const a = nodes[ai], b = nodes[bi];
+      const isConnectedToLeak = (ai === 6 || bi === 6);
+      const isActiveLeak = isConnectedToLeak && !shutoff;
+      const isIsolated = isConnectedToLeak && shutoff;
+
+      ctx.beginPath();
+      ctx.moveTo(a.x*W, a.y*H);
+      ctx.lineTo(b.x*W, b.y*H);
+      ctx.lineWidth = 4;
+      ctx.strokeStyle = isActiveLeak
+        ? `rgba(255,59,59,0.35)`
+        : isIsolated
+          ? `rgba(0,255,136,0.18)`
+          : `rgba(0,180,216,0.22)`;
+      ctx.stroke();
+
+      // Pipe highlight
+      ctx.beginPath();
+      ctx.moveTo(a.x*W, a.y*H);
+      ctx.lineTo(b.x*W, b.y*H);
+      ctx.lineWidth = 1.5;
+      ctx.strokeStyle = isActiveLeak
+        ? `rgba(255,100,100,0.5)`
+        : isIsolated
+          ? `rgba(0,255,136,0.3)`
+          : `rgba(0,229,255,0.2)`;
+      ctx.stroke();
+    });
+
+    // Move and draw particles
+    for (let i = particles.length - 1; i >= 0; i--) {
+      const p = particles[i];
+      p.t += p.speed;
+      if (p.t > 1) {
+        // Respawn in an active pipe
+        p.pipe = activePipes[Math.floor(Math.random() * activePipes.length)];
+        p.t = 0;
+        p.speed = 0.003 + Math.random() * 0.005;
+      }
+      const [ai, bi] = p.pipe;
+      const a = nodes[ai], b = nodes[bi];
+      const px = a.x*W + (b.x*W - a.x*W) * p.t;
+      const py = a.y*H + (b.y*H - a.y*H) * p.t;
+      const isLeakPath = (p.pipe[0] === 6 || p.pipe[1] === 6);
+
+      ctx.beginPath();
+      ctx.arc(px, py, p.size, 0, Math.PI*2);
+      ctx.fillStyle = isLeakPath
+        ? `rgba(255,59,59,${p.alpha * 0.9})`
+        : `rgba(0,229,255,${p.alpha * 0.7})`;
+      ctx.fill();
+    }
+
+    // Drips from leak
+    if (!shutoff && ts - lastDrip > 120) {
+      spawnDrip();
+      lastDrip = ts;
+    }
+    for (let i = drips.length - 1; i >= 0; i--) {
+      const d = drips[i];
+      d.y += d.vy;
+      d.x += d.vx;
+      d.vy += 0.1;
+      d.alpha -= 0.02;
+      if (d.alpha <= 0) { drips.splice(i, 1); continue; }
+      ctx.beginPath();
+      ctx.ellipse(d.x, d.y, d.size * 0.5, d.size, 0, 0, Math.PI*2);
+      ctx.fillStyle = `rgba(0,180,216,${d.alpha})`;
+      ctx.fill();
+    }
+
+    // Draw nodes
+    nodes.forEach((n, i) => {
+      const x = n.x*W, y = n.y*H;
+      const isLeakNode = (i === 6);
+      const isActiveLeak = isLeakNode && !shutoff;
+      const isIsolated = isLeakNode && shutoff;
+      const r = i === 0 ? 9 : 6;
+
+      // Glow
+      if (isActiveLeak) {
+        const pulse = 0.5 + 0.5 * Math.sin(frame * 0.08);
+        ctx.beginPath();
+        ctx.arc(x, y, r + 8 + pulse*6, 0, Math.PI*2);
+        ctx.fillStyle = `rgba(255,59,59,${0.08 * pulse})`;
+        ctx.fill();
+      }
+
+      ctx.beginPath();
+      ctx.arc(x, y, r, 0, Math.PI*2);
+      ctx.fillStyle = isActiveLeak
+        ? `rgba(255,59,59,0.9)`
+        : isIsolated
+          ? `rgba(0,255,136,0.7)`
+          : i === 0
+            ? `rgba(0,229,255,0.9)`
+            : `rgba(0,180,216,0.7)`;
+      ctx.fill();
+      ctx.strokeStyle = isActiveLeak ? '#ff3b3b' : isIsolated ? '#00ff88' : '#00e5ff';
+      ctx.lineWidth = 1.5;
+      ctx.stroke();
+
+      // Label
+      ctx.fillStyle = isActiveLeak ? '#ff8888' : '#4a6480';
+      if (isIsolated) ctx.fillStyle = '#00ff88';
+      ctx.font = `${(isActiveLeak || isIsolated) ? 'bold ' : ''}10px IBM Plex Mono`;
+      
+      let labelText = n.label;
+      if (isIsolated) labelText = '✔ SECURE';
+      
+      ctx.textAlign = 'center';
+      ctx.fillText(labelText, x, y - r - 5);
+
+      // Flow rate label at main node
+      if (i === 0) {
+        const normalFlow = alert.normal;
+        const currentFlow = shutoff ? normalFlow : alert.value;
+        ctx.fillStyle = '#00e5ff';
+        ctx.font = 'bold 11px IBM Plex Mono';
+        ctx.fillText(`${currentFlow.toLocaleString()} L/hr`, x, y + r + 14);
+      }
+    });
+
+    // We no longer dim the whole background since supply is not fully cut.
+
+    pipeAnim = requestAnimationFrame(draw);
+  }
+
+  pipeAnim = requestAnimationFrame(draw);
+}
+
+// ─────────────────────────────────────────────
+//  FILTER
+// ─────────────────────────────────────────────
+function setFilter(filter, btn) {
+  currentFilter = filter;
+  document.querySelectorAll('.filter-btn').forEach(b => b.classList.remove('active'));
+  btn.classList.add('active');
+  renderAlerts();
+}
+
+// ─────────────────────────────────────────────
+//  TOAST
+// ─────────────────────────────────────────────
+let toastTimer;
+function showToast(type, msg) {
+  const t = document.getElementById('toast');
+  t.className = `toast ${type} show`;
+  t.textContent = msg;
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => t.classList.remove('show'), 4000);
+}
+
+// ─────────────────────────────────────────────
+//  INIT
+// ─────────────────────────────────────────────
+renderAlerts();
+
+// Resize pipe canvas on window resize
+window.addEventListener('resize', () => {
+  if (activeAlertData && document.getElementById('water-view').classList.contains('visible')) {
+    stopPipeAnim();
+    setTimeout(() => startPipeAnim(activeAlertData, isShutoff), 50);
+  }
+});
+</script>
+</body>
+</html>

@@ -1,0 +1,1232 @@
+Directory structure:
+└── hiwarkhedeprasad-rsoc/
+    ├── README.md
+    ├── files.zip
+    └── files/
+        ├── senior-ui-design-competency-framework.skill
+        ├── backend/
+        │   ├── generate_data.py
+        │   ├── main.py
+        │   └── requirements.txt
+        └── frontend/
+            ├── index.html
+            ├── package.json
+            └── styles.css
+
+================================================
+FILE: README.md
+================================================
+"# RSOC" 
+
+
+
+================================================
+FILE: files.zip
+================================================
+[Binary file]
+
+
+================================================
+FILE: files/senior-ui-design-competency-framework.skill
+================================================
+[Binary file]
+
+
+================================================
+FILE: files/backend/generate_data.py
+================================================
+"""
+NexaCity — Synthetic City Dataset Generator
+Run: python generate_data.py
+Outputs: city_data.csv (7 days of hourly data, 8 zones)
+"""
+import pandas as pd
+import numpy as np
+from datetime import datetime, timedelta
+
+np.random.seed(42)
+
+ZONES = {
+    "Z1": {"name": " Sitabuldi", "lat": 21.1444, "lon": 79.0832, "type": "commercial"},
+    "Z2": {"name": "Gandhibagh",  "lat": 21.1528, "lon": 79.1026, "type": "industrial"},
+    "Z3": {"name": "Dharampeth",  "lat": 21.1399, "lon": 79.0607, "type": "residential"},
+    "Z4": {"name": "Sadar",       "lat": 21.1610, "lon": 79.0760, "type": "commercial"},
+    "Z5": {"name": "MIDC Hingna",     "lat": 21.0963, "lon": 78.9839, "type": "industrial"},
+    "Z6": {"name": "Kamptee Road",    "lat": 21.2000, "lon": 79.1200, "type": "commercial"},
+    "Z7": {"name": "Manish Nagar",    "lat": 21.0931, "lon": 79.0617, "type": "residential"},
+    "Z8": {"name": "Wathoda",         "lat": 21.1458, "lon": 79.1350, "type": "industrial"},
+}
+
+records = []
+start = datetime.now() - timedelta(days=7)
+
+for day in range(7):
+    for hour in range(24):
+        ts = start + timedelta(days=day, hours=hour)
+        is_weekday = ts.weekday() < 5
+        is_peak = hour in [8, 9, 17, 18, 19]
+        is_night = hour < 6 or hour > 22
+
+        for zone_id, zone in ZONES.items():
+            # Traffic (0-100 congestion index)
+            base_traffic = 70 if (is_peak and is_weekday and zone["type"] in ["commercial","mixed"]) else 20
+            if zone["type"] == "industrial":
+                base_traffic = 60 if (7 <= hour <= 18 and is_weekday) else 15
+            if is_night:
+                base_traffic = 5
+            traffic = np.clip(base_traffic + np.random.normal(0, 8), 0, 100)
+
+            # AQI (50-300) — correlated with traffic + industrial
+            aqi_base = 80 + traffic * 0.8
+            if zone["type"] == "industrial":
+                aqi_base += 60
+            if zone["type"] == "residential" or zone["type"] == "educational":
+                aqi_base -= 20
+            aqi = np.clip(aqi_base + np.random.normal(0, 12), 40, 300)
+
+            # Energy kWh (zone consumption)
+            energy_base = 500 if zone["type"] == "commercial" else 300
+            if is_peak and is_weekday:
+                energy_base *= 1.6
+            if is_night:
+                energy_base *= 0.3
+            if zone["type"] == "industrial":
+                energy_base = 900 if is_weekday else 400
+            energy = np.clip(energy_base + np.random.normal(0, 40), 50, 2000)
+
+            # Water L/hr
+            water_base = 1200 if zone["type"] == "residential" else 800
+            if 6 <= hour <= 9 or 18 <= hour <= 21:
+                water_base *= 1.5
+            if is_night:
+                water_base *= 0.2
+            water = np.clip(water_base + np.random.normal(0, 80), 50, 4000)
+
+            # Transport ridership
+            transport_base = 800 if (is_peak and is_weekday) else 150
+            if zone["type"] in ["commercial","educational"]:
+                transport_base *= 1.4
+            if is_night:
+                transport_base = 20
+            transport = np.clip(transport_base + np.random.normal(0, 60), 0, 3000)
+
+            # Inject anomalies for demo interest
+            if zone_id == "Z2" and day == 5 and 14 <= hour <= 16:
+                aqi += 120  # Industrial pollution spike
+                traffic += 30
+            if zone_id == "Z7" and day == 3 and hour == 3:
+                water *= 4.5  # Pipe leak anomaly at 3am
+            if zone_id == "Z1" and day == 6 and 17 <= hour <= 19:
+                energy *= 2.2  # Energy overload during event
+
+            records.append({
+                "timestamp": ts.isoformat(),
+                "hour": hour,
+                "day_of_week": ts.strftime("%A"),
+                "zone_id": zone_id,
+                "zone_name": zone["name"],
+                "zone_type": zone["type"],
+                "lat": zone["lat"],
+                "lon": zone["lon"],
+                "traffic_index": round(traffic, 1),
+                "aqi": round(aqi, 1),
+                "energy_kwh": round(energy, 1),
+                "water_liters": round(water, 1),
+                "transport_ridership": int(transport),
+            })
+
+df = pd.DataFrame(records)
+df.to_csv("city_data.csv", index=False)
+print(f"✅ Generated {len(df)} records across {len(ZONES)} zones × 7 days × 24 hours")
+print(df.head())
+
+
+
+================================================
+FILE: files/backend/main.py
+================================================
+"""
+NexaCity Backend — FastAPI
+Run: uvicorn main:app --reload --port 8000
+"""
+from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
+import pandas as pd
+import numpy as np
+from sklearn.ensemble import IsolationForest
+from sklearn.preprocessing import StandardScaler
+import json
+from datetime import datetime, timedelta
+import os
+
+app = FastAPI(title="NexaCity API")
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+# ── Load & preprocess data ──────────────────────────────────────────────────
+DATA_PATH = os.path.join(os.path.dirname(__file__), "../data/city_data.csv")
+df = pd.read_csv(DATA_PATH, parse_dates=["timestamp"])
+
+METRICS = ["traffic_index", "aqi", "energy_kwh", "water_liters", "transport_ridership"]
+ZONES = df[["zone_id","zone_name","zone_type","lat","lon"]].drop_duplicates().to_dict("records")
+
+# ── Anomaly Detection (Isolation Forest per zone) ──────────────────────────
+anomaly_results = {}
+for zone_id, zone_df in df.groupby("zone_id"):
+    features = zone_df[METRICS].fillna(0)
+    scaler = StandardScaler()
+    scaled = scaler.fit_transform(features)
+    model = IsolationForest(contamination=0.05, random_state=42)
+    preds = model.fit_predict(scaled)
+    scores = model.score_samples(scaled)
+    zone_df = zone_df.copy()
+    zone_df["anomaly"] = (preds == -1)
+    zone_df["anomaly_score"] = -scores  # higher = more anomalous
+    anomaly_results[zone_id] = zone_df
+
+anomaly_df = pd.concat(anomaly_results.values())
+
+# ── Simple Forecast (rolling trend extrapolation) ──────────────────────────
+def forecast_metric(zone_id: str, metric: str, hours: int = 24):
+    zdf = df[df["zone_id"] == zone_id].sort_values("timestamp")
+    last_48 = zdf.tail(48)[metric].values
+    # Compute hourly pattern from historical data
+    hourly_avg = zdf.groupby("hour")[metric].mean()
+    now_hour = datetime.now().hour
+    forecast = []
+    for i in range(hours):
+        h = (now_hour + i) % 24
+        base = hourly_avg.get(h, last_48.mean())
+        noise = np.random.normal(0, base * 0.03)
+        forecast.append(round(float(base + noise), 1))
+    return forecast
+
+# ── Cross-Domain Correlation ────────────────────────────────────────────────
+def compute_correlations():
+    results = []
+    for zone_id, zdf in df.groupby("zone_id"):
+        corr = zdf[METRICS].corr()
+        pairs = [
+            {"metric_a": "traffic_index", "metric_b": "aqi",
+             "correlation": round(float(corr.loc["traffic_index","aqi"]), 3)},
+            {"metric_a": "traffic_index", "metric_b": "energy_kwh",
+             "correlation": round(float(corr.loc["traffic_index","energy_kwh"]), 3)},
+            {"metric_a": "aqi", "metric_b": "transport_ridership",
+             "correlation": round(float(corr.loc["aqi","transport_ridership"]), 3)},
+        ]
+        results.append({"zone_id": zone_id, "correlations": pairs})
+    return results
+
+correlations = compute_correlations()
+
+# ── Zone Health Score (0-100, higher = healthier) ──────────────────────────
+def compute_zone_health():
+    latest = df.sort_values("timestamp").groupby("zone_id").last().reset_index()
+    scores = []
+    for _, row in latest.iterrows():
+        # Normalize each metric (lower traffic/aqi/energy = better; higher transport = better)
+        traffic_score = max(0, 100 - row["traffic_index"])
+        aqi_score = max(0, 100 - (row["aqi"] - 50) / 2.5)
+        energy_score = max(0, 100 - row["energy_kwh"] / 20)
+        transport_score = min(100, row["transport_ridership"] / 10)
+        health = round((traffic_score * 0.3 + aqi_score * 0.35 + energy_score * 0.2 + transport_score * 0.15), 1)
+        health = np.clip(health, 0, 100)
+
+        # Check for active anomalies
+        zone_anomalies = anomaly_df[(anomaly_df["zone_id"] == row["zone_id"]) &
+                                     (anomaly_df["anomaly"] == True)]
+        recent_anomalies = zone_anomalies.tail(3)
+        has_alert = len(recent_anomalies) > 0
+
+        scores.append({
+            "zone_id": row["zone_id"],
+            "zone_name": row["zone_name"],
+            "zone_type": row["zone_type"],
+            "lat": row["lat"],
+            "lon": row["lon"],
+            "health_score": float(health),
+            "status": "critical" if health < 40 else "warning" if health < 65 else "good",
+            "has_alert": bool(has_alert),
+            "latest": {
+                "traffic_index": round(float(row["traffic_index"]), 1),
+                "aqi": round(float(row["aqi"]), 1),
+                "energy_kwh": round(float(row["energy_kwh"]), 1),
+                "water_liters": round(float(row["water_liters"]), 1),
+                "transport_ridership": int(row["transport_ridership"]),
+            }
+        })
+    return scores
+
+# ── ROUTES ──────────────────────────────────────────────────────────────────
+
+@app.get("/")
+def root():
+    return {"status": "NexaCity API running", "zones": len(ZONES), "records": len(df)}
+
+@app.get("/api/zones")
+def get_zones():
+    return compute_zone_health()
+
+@app.get("/api/zones/{zone_id}/timeseries")
+def get_timeseries(zone_id: str, metric: str = "aqi", hours: int = 48):
+    zdf = df[df["zone_id"] == zone_id].sort_values("timestamp").tail(hours)
+    return {
+        "zone_id": zone_id,
+        "metric": metric,
+        "data": [
+            {"timestamp": row["timestamp"].isoformat(), "value": round(float(row[metric]), 1)}
+            for _, row in zdf.iterrows()
+        ]
+    }
+
+@app.get("/api/zones/{zone_id}/forecast")
+def get_forecast(zone_id: str, metric: str = "aqi", hours: int = 24):
+    values = forecast_metric(zone_id, metric, hours)
+    now = datetime.now()
+    return {
+        "zone_id": zone_id,
+        "metric": metric,
+        "forecast": [
+            {"hour": i+1, "timestamp": (now + timedelta(hours=i+1)).strftime("%H:00"), "value": v}
+            for i, v in enumerate(values)
+        ]
+    }
+
+@app.get("/api/anomalies")
+def get_anomalies():
+    alerts = anomaly_df[anomaly_df["anomaly"] == True].sort_values("anomaly_score", ascending=False)
+    recent = alerts.tail(20)
+    result = []
+    for _, row in recent.iterrows():
+        # Determine which metric is most anomalous
+        metric_vals = {m: row[m] for m in METRICS}
+        top_metric = max(metric_vals, key=lambda m: abs(metric_vals[m]))
+        result.append({
+            "zone_id": row["zone_id"],
+            "zone_name": row["zone_name"],
+            "timestamp": row["timestamp"].isoformat(),
+            "anomaly_score": round(float(row["anomaly_score"]), 3),
+            "top_metric": top_metric,
+            "value": round(float(row[top_metric]), 1),
+            "metrics": {m: round(float(row[m]), 1) for m in METRICS}
+        })
+    return result
+
+@app.get("/api/correlations")
+def get_correlations():
+    return correlations
+
+@app.get("/api/summary")
+def get_summary():
+    zone_health = compute_zone_health()
+    critical = [z for z in zone_health if z["status"] == "critical"]
+    warnings = [z for z in zone_health if z["status"] == "warning"]
+    anomaly_count = int(anomaly_df["anomaly"].sum())
+    return {
+        "total_zones": len(zone_health),
+        "critical_zones": len(critical),
+        "warning_zones": len(warnings),
+        "total_anomalies_detected": anomaly_count,
+        "avg_city_health": round(float(np.mean([z["health_score"] for z in zone_health])), 1),
+        "critical_zone_names": [z["zone_name"] for z in critical],
+    }
+
+@app.post("/api/query")
+async def nlp_query(body: dict):
+    question = body.get("question", "").lower()
+    zone_health = compute_zone_health()
+    anomalies = get_anomalies()
+
+    # Rule-based NLP for demo reliability (no external API needed)
+    if any(w in question for w in ["worst", "critical", "bad", "alert", "danger"]):
+        critical = [z for z in zone_health if z["status"] == "critical"]
+        if not critical:
+            critical = sorted(zone_health, key=lambda z: z["health_score"])[:2]
+        names = ", ".join([z["zone_name"] for z in critical])
+        return {"answer": f"⚠️ Critical zones right now: **{names}**. These zones have health scores below 40 and require immediate attention.",
+                "zones": [z["zone_id"] for z in critical], "type": "alert"}
+
+    if any(w in question for w in ["air", "aqi", "pollution", "quality"]):
+        worst_aqi = max(zone_health, key=lambda z: z["latest"]["aqi"])
+        return {"answer": f"🌫️ Worst air quality is in **{worst_aqi['zone_name']}** with AQI {worst_aqi['latest']['aqi']}. "
+                          f"{'This is hazardous — avoid outdoor activity.' if worst_aqi['latest']['aqi'] > 150 else 'Moderate levels — sensitive groups should take care.'}",
+                "zones": [worst_aqi["zone_id"]], "type": "aqi"}
+
+    if any(w in question for w in ["traffic", "congestion", "road", "jam"]):
+        worst_traffic = max(zone_health, key=lambda z: z["latest"]["traffic_index"])
+        return {"answer": f"🚗 Highest congestion: **{worst_traffic['zone_name']}** (index: {worst_traffic['latest']['traffic_index']:.0f}/100). "
+                          f"Consider rerouting public transport through Z6 corridor.",
+                "zones": [worst_traffic["zone_id"]], "type": "traffic"}
+
+    if any(w in question for w in ["energy", "power", "electricity", "overload"]):
+        worst_energy = max(zone_health, key=lambda z: z["latest"]["energy_kwh"])
+        return {"answer": f"⚡ Peak energy consumption: **{worst_energy['zone_name']}** at {worst_energy['latest']['energy_kwh']:.0f} kWh. "
+                          f"Recommend load balancing — shift non-critical loads to off-peak hours.",
+                "zones": [worst_energy["zone_id"]], "type": "energy"}
+
+    if any(w in question for w in ["water", "leak", "consumption"]):
+        worst_water = max(zone_health, key=lambda z: z["latest"]["water_liters"])
+        return {"answer": f"💧 Highest water consumption: **{worst_water['zone_name']}** at {worst_water['latest']['water_liters']:.0f} L/hr. "
+                          f"{'⚠️ Anomaly detected — possible pipe leak. Dispatch inspection team.' if worst_water['zone_id'] == 'Z7' else 'Within expected range for zone type.'}",
+                "zones": [worst_water["zone_id"]], "type": "water"}
+
+    if any(w in question for w in ["anomal", "unusual", "spike", "strange"]):
+        if anomalies:
+            a = anomalies[0]
+            return {"answer": f"🔍 Most significant anomaly: **{a['zone_name']}** — unusual {a['top_metric'].replace('_',' ')} detected (value: {a['value']}). "
+                              f"Anomaly score: {a['anomaly_score']:.2f}. This occurred at {a['timestamp'][:16]}.",
+                    "zones": [a["zone_id"]], "type": "anomaly"}
+
+    if any(w in question for w in ["health", "overall", "summary", "status", "how is"]):
+        summary = get_summary()
+        return {"answer": f"🏙️ City Health Overview: Average score **{summary['avg_city_health']}/100**. "
+                          f"{summary['critical_zones']} critical zones, {summary['warning_zones']} on watch. "
+                          f"{summary['total_anomalies_detected']} anomalies detected in last 7 days.",
+                "zones": [], "type": "summary"}
+
+    return {"answer": "I can answer questions about: air quality, traffic, energy, water, anomalies, or overall city health. Try: 'Which zones have the worst AQI?' or 'Where is energy overloading?'",
+            "zones": [], "type": "help"}
+
+if __name__ == "__main__":
+    import uvicorn
+    uvicorn.run(app, host="0.0.0.0", port=8000)
+
+
+
+================================================
+FILE: files/backend/requirements.txt
+================================================
+fastapi==0.111.0
+uvicorn[standard]==0.29.0
+pandas==2.2.2
+numpy==1.26.4
+scikit-learn==1.4.2
+python-multipart==0.0.9
+
+
+================================================
+FILE: files/frontend/index.html
+================================================
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>NexaCity Nagpur — Urban Intelligence</title>
+<link href="https://fonts.googleapis.com/css2?family=Bebas+Neue&family=IBM+Plex+Mono:wght@400;500;600&family=Outfit:wght@300;400;600;700;900&display=swap" rel="stylesheet">
+<script src="https://unpkg.com/maplibre-gl@4.1.2/dist/maplibre-gl.js"></script>
+<link href="https://unpkg.com/maplibre-gl@4.1.2/dist/maplibre-gl.css" rel="stylesheet" />
+<script src="https://unpkg.com/@turf/turf/turf.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+<div class="scanlines"></div>
+
+<!-- ══════════ TOP NAVIGATION ══════════ -->
+<nav class="top-nav">
+  <div class="nav-left">
+    <div class="logo">
+      <div class="logo-mark">🏙️</div>
+      <div class="logo-wordmark">Nexa<em>City</em></div>
+    </div>
+    <div class="nav-links">
+      <div class="nav-link active" data-page="dashboard" onclick="switchPage('dashboard')">
+        <span class="nav-icon">📊</span> Dashboard
+      </div>
+      <div class="nav-link" data-page="map" onclick="switchPage('map')">
+        <span class="nav-icon">🗺️</span> 3D Map
+      </div>
+      <div class="nav-link" data-page="analytics" onclick="switchPage('analytics')">
+        <span class="nav-icon">📈</span> Analytics
+      </div>
+      <div class="nav-link" data-page="alerts" onclick="switchPage('alerts')">
+        <span class="nav-icon">🚨</span> Alerts <span id="nav-alert-count" style="color:var(--red);font-size:10px"></span>
+      </div>
+      <div class="nav-link" data-page="planner" onclick="switchPage('planner')">
+        <span class="nav-icon">🧠</span> Planner
+      </div>
+    </div>
+  </div>
+  <div class="nav-right">
+    <div class="hstat"><div class="hstat-val green" id="h-health">--</div><div class="hstat-lbl">Health</div></div>
+    <div class="hstat-sep"></div>
+    <div class="hstat"><div class="hstat-val red" id="h-critical">0</div><div class="hstat-lbl">Critical</div></div>
+    <div class="hstat-sep"></div>
+    <div class="hstat"><div class="hstat-val" id="h-tick">08:00</div><div class="hstat-lbl">Sim Time</div></div>
+    <div class="hstat-sep"></div>
+    <div class="live-pill"><div class="pulse"></div> LIVE</div>
+  </div>
+</nav>
+
+<!-- ══════════ PAGE CONTAINER ══════════ -->
+<div class="page-container">
+
+  <!-- ═══ DASHBOARD PAGE ═══ -->
+  <div class="page-view active" id="page-dashboard">
+    <div class="dash-page">
+      <!-- Stats Row -->
+      <div class="dash-grid" id="dash-stats"></div>
+
+      <!-- Zone Cards -->
+      <div class="dash-section-title">ZONE OVERVIEW</div>
+      <div class="zone-grid" id="dash-zones"></div>
+    </div>
+  </div>
+
+  <!-- ═══ MAP PAGE ═══ -->
+  <div class="page-view" id="page-map">
+    <div class="map-page" style="width:100%;height:100%;display:flex;flex-direction:column">
+      <div class="map-toolbar">
+        <span style="font-size:10px;color:var(--muted);letter-spacing:1px;text-transform:uppercase">Metric:</span>
+        <select class="metric-sel" id="metric-select" onchange="switchMetric(this.value)">
+          <option value="aqi">Air Quality (AQI)</option>
+          <option value="traffic">Traffic Congestion</option>
+          <option value="energy">Energy Load (kWh)</option>
+          <option value="water">Water Usage (L/hr)</option>
+          <option value="health">Zone Health Score</option>
+        </select>
+        <div style="margin-left:auto;display:flex;gap:8px;align-items:center">
+          <button class="tool-btn" onclick="setSpeed(1)">1×</button>
+          <button class="tool-btn active" onclick="setSpeed(2)">2×</button>
+          <button class="tool-btn" onclick="setSpeed(5)">5×</button>
+          <button class="tool-btn" id="paused-btn" onclick="togglePause()" style="color:var(--yellow)">⏸ Pause</button>
+        </div>
+      </div>
+      <div class="map-wrap">
+        <div id="map" style="width:100%;height:100%"></div>
+        <div class="map-legend">
+          <div class="leg-title" id="leg-title">Air Quality Index</div>
+          <div class="leg-item"><div class="leg-swatch" style="background:#00ff88"></div><span>Good</span></div>
+          <div class="leg-item"><div class="leg-swatch" style="background:#ffd60a"></div><span>Moderate</span></div>
+          <div class="leg-item"><div class="leg-swatch" style="background:#ff8800"></div><span>Unhealthy</span></div>
+          <div class="leg-item"><div class="leg-swatch" style="background:#ff3b3b"></div><span>Hazardous</span></div>
+        </div>
+        <div class="map-tooltip" id="map-tooltip">
+          <div class="tt-title" id="tt-name">Zone</div>
+          <div id="tt-body"></div>
+        </div>
+      </div>
+      <!-- NLP Bar -->
+      <div class="nlp-bar">
+        <div class="nlp-chips">
+          <span class="nlp-chip" onclick="nlpQuery(this.innerText)">Worst AQI zone?</span>
+          <span class="nlp-chip" onclick="nlpQuery(this.innerText)">Critical zones?</span>
+          <span class="nlp-chip" onclick="nlpQuery(this.innerText)">Energy overload?</span>
+          <span class="nlp-chip" onclick="nlpQuery(this.innerText)">City health?</span>
+        </div>
+        <input class="nlp-input" id="nlp-input" placeholder="Ask about city data..." onkeydown="if(event.key==='Enter')nlpQuery(this.value)">
+        <button class="nlp-btn" onclick="nlpQuery(document.getElementById('nlp-input').value)">Query ▶</button>
+        <div class="nlp-result" id="nlp-result" style="display:none"></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ═══ ANALYTICS PAGE ═══ -->
+  <div class="page-view" id="page-analytics">
+    <div class="analytics-page">
+      <div class="analytics-header">
+        <div class="dash-section-title">LIVE METRICS</div>
+        <select class="zone-select" id="analytics-zone-select" onchange="selectedZone=this.value;updateAnalytics()"></select>
+      </div>
+      <div class="chart-grid">
+        <div class="chart-card"><div class="chart-card-title">Air Quality (AQI) — Last 60s</div><div class="sparkline-wrap"><canvas class="sparkline" id="sp-aqi"></canvas></div></div>
+        <div class="chart-card"><div class="chart-card-title">Traffic Congestion — Last 60s</div><div class="sparkline-wrap"><canvas class="sparkline" id="sp-traffic"></canvas></div></div>
+        <div class="chart-card"><div class="chart-card-title">Energy Load (kWh) — Last 60s</div><div class="sparkline-wrap"><canvas class="sparkline" id="sp-energy"></canvas></div></div>
+        <div class="chart-card"><div class="chart-card-title">Water Usage (L/hr) — Last 60s</div><div class="sparkline-wrap"><canvas class="sparkline" id="sp-water"></canvas></div></div>
+      </div>
+      <div class="dash-section-title" style="margin-top:8px">ZONE CORRELATION SUMMARY</div>
+      <div class="correlation-grid" id="corr-grid"></div>
+    </div>
+  </div>
+
+  <!-- ═══ ALERTS PAGE ═══ -->
+  <div class="page-view" id="page-alerts">
+    <div class="alerts-page">
+      <div class="alert-header">
+        <div class="dash-section-title">LIVE ALERT FEED</div>
+        <div style="display:flex;gap:12px">
+          <div class="alert-stat"><div class="alert-stat-val" id="alert-total">0</div><div class="alert-stat-lbl">Total Alerts</div></div>
+          <div class="alert-stat"><div class="alert-stat-val" id="alert-crit-count" style="color:var(--red)">0</div><div class="alert-stat-lbl">Critical</div></div>
+          <div class="alert-stat"><div class="alert-stat-val" id="alert-warn-count" style="color:var(--yellow)">0</div><div class="alert-stat-lbl">Warnings</div></div>
+        </div>
+      </div>
+      <div id="alert-list"></div>
+    </div>
+  </div>
+
+  <!-- ═══ PLANNER PAGE ═══ -->
+  <div class="page-view" id="page-planner">
+    <div class="planner-page">
+      <!-- Left: Controls -->
+      <div class="planner-panel">
+        <div class="planner-title">🧠 AI URBAN PLANNER</div>
+        <div class="planner-sub">Select infrastructure to find the optimal location in Nagpur based on live simulation data.</div>
+
+        <div class="infra-grid">
+          <div class="infra-btn active" data-type="park" onclick="selectInfra('park')">
+            <div class="infra-icon">🌳</div><div class="infra-name">Park</div>
+          </div>
+          <div class="infra-btn" data-type="hospital" onclick="selectInfra('hospital')">
+            <div class="infra-icon">🏥</div><div class="infra-name">Hospital</div>
+          </div>
+          <div class="infra-btn" data-type="school" onclick="selectInfra('school')">
+            <div class="infra-icon">🎓</div><div class="infra-name">School</div>
+          </div>
+          <div class="infra-btn" data-type="ev_station" onclick="selectInfra('ev_station')">
+            <div class="infra-icon">⚡</div><div class="infra-name">EV Station</div>
+          </div>
+          <div class="infra-btn" data-type="water_plant" onclick="selectInfra('water_plant')">
+            <div class="infra-icon">💧</div><div class="infra-name">Water Plant</div>
+          </div>
+          <div class="infra-btn" data-type="solar_farm" onclick="selectInfra('solar_farm')">
+            <div class="infra-icon">☀️</div><div class="infra-name">Solar Farm</div>
+          </div>
+        </div>
+
+        <div style="margin-bottom:14px">
+          <div style="font-size:9px;color:var(--muted);letter-spacing:1.5px;text-transform:uppercase;margin-bottom:6px">TARGET AREA (Optional)</div>
+          <select id="planner-zone-sel" class="zone-select" style="width:100%;padding:10px 12px;font-size:12px;border-radius:8px">
+            <option value="all">🌐 All Zones — City-wide Search</option>
+            <option value="Z1">📍 Sitabuldi — Central</option>
+            <option value="Z2">📍 Gandhibagh — Core City</option>
+            <option value="Z3">📍 Dharampeth — West</option>
+            <option value="Z4">📍 Sadar — Cantonment</option>
+            <option value="Z5">📍 MIDC Hingna — Industrial W</option>
+            <option value="Z6">📍 Kamptee Road — North</option>
+            <option value="Z7">📍 Manish Nagar — South-West</option>
+            <option value="Z8">📍 Wathoda — East Indl</option>
+            <option value="Z9">📍 Seminary Hills — North-West</option>
+            <option value="Z10">📍 Itwari — East</option>
+            <option value="Z11">📍 Lakadganj — Central-E</option>
+            <option value="Z12">📍 Pardi — North-East</option>
+          </select>
+        </div>
+
+        <button class="plan-btn" onclick="runPlanner()">🔍 Find Best Location</button>
+
+        <div id="planner-results"></div>
+      </div>
+
+      <!-- Right: Impact -->
+      <div class="planner-impact" id="planner-impact">
+        <div style="color:var(--muted);text-align:center;padding:60px 20px;font-size:13px">
+          Select an infrastructure type and click<br>"Find Best Location" to see AI recommendations.
+        </div>
+      </div>
+    </div>
+  </div>
+
+</div><!-- page-container -->
+
+<script src="app.js"></script>
+</body>
+</html>
+
+
+
+================================================
+FILE: files/frontend/package.json
+================================================
+{
+  "dependencies": {
+    "@turf/turf": "^7.3.4"
+  }
+}
+
+
+
+================================================
+FILE: files/frontend/styles.css
+================================================
+/* ══════════════════════════════════════════════════════════
+   TOKEN ARCHITECTURE (Global -> Alias -> Component)
+   ══════════════════════════════════════════════════════════ */
+:root {
+  /* ── GLOBAL TOKENS (Raw values, never consumed directly) ── */
+  --slate-900: #06090f;
+  --slate-800: #0c1118;
+  --slate-700: #111820;
+  --slate-600: #162030;
+  --slate-500: #1c2d42;
+  --slate-400: #243650;
+  --slate-300: #2a3d55;
+  --slate-200: #4a6480;
+  --slate-100: #dce8f5;
+  --slate-50:  #f8fafc;
+  
+  --cyan-500:  #00e5ff;
+  --cyan-400:  #00b4d8;
+  --cyan-900:  #003d52;
+  
+  --purple-500: #a855f7;
+  --purple-900: rgba(168,85,247,0.1);
+  --green-500:  #00ff88;
+  --yellow-500: #ffd60a;
+  --red-500:    #ff3b3b;
+  
+  --transparent: transparent;
+  --white: #ffffff;
+  --black: #000000;
+
+  /* ── TYPOGRAPHY TOKENS (Ratio-based 1.250 scale) ── */
+  --font-sans: 'Outfit', sans-serif;
+  --font-mono: 'IBM Plex Mono', monospace;
+  --font-display: 'Bebas Neue', cursive;
+  
+  --size-xs:  0.75rem;   /* 12px */
+  --size-sm:  0.875rem;  /* 14px */
+  --size-base:1rem;      /* 16px */
+  --size-lg:  1.25rem;   /* 20px */
+  --size-xl:  1.563rem;  /* 25px */
+  --size-2xl: 1.953rem;  /* 31px */
+  
+  --line-tight: 1.1;
+  --line-snug:  1.3;
+  --line-base:  1.5;
+
+  /* ── SPACING TOKENS (Strict 4px base scale) ── */
+  --space-01: 4px;
+  --space-02: 8px;
+  --space-03: 12px;
+  --space-04: 16px;
+  --space-05: 20px;
+  --space-06: 24px;
+  --space-08: 32px;
+  --space-12: 48px;
+
+  /* ── GEOMETRIC TRUTH ── */
+  --radius-sm: 4px;
+  --radius-md: 8px;
+  --radius-lg: 12px;
+  --radius-full: 9999px;
+  
+  /* ── MOTION TOKENS (Timing & Easing) ── */
+  --duration-micro: 150ms;
+  --duration-state: 250ms;
+  --duration-page:  400ms;
+  --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
+
+  /* ── ALIAS TOKENS (Semantic roles mapped to Globals) ── */
+  --color-bg-base:     var(--slate-900);
+  --color-surface-lvl1:var(--slate-800);
+  --color-surface-lvl2:var(--slate-700);
+  --color-surface-lvl3:var(--slate-600);
+  
+  --color-border-subtle: var(--slate-500);
+  --color-border-strong: var(--slate-400);
+  
+  --color-text-primary:  var(--slate-50);
+  --color-text-secondary:var(--slate-100);
+  --color-text-muted:    var(--slate-200);
+  --color-text-disabled: var(--slate-300);
+  
+  --color-action-primary:     var(--cyan-500);
+  --color-action-primary-hover:var(--cyan-400);
+  --color-action-secondary:   var(--purple-500);
+  
+  --color-status-success: var(--green-500);
+  --color-status-warning: var(--yellow-500);
+  --color-status-critical:var(--red-500);
+
+  /* Elevation (Lightness instead of shadow for dark mode) */
+  --elevation-overlay: rgba(6,9,15,0.95);
+}
+
+* { margin: 0; padding: 0; box-sizing: border-box; }
+html, body { height: 100%; overflow: hidden; }
+body { 
+  background: var(--color-bg-base); 
+  color: var(--color-text-primary); 
+  font-family: var(--font-sans); 
+  display: flex; 
+  flex-direction: column;
+  line-height: var(--line-base);
+  -webkit-font-smoothing: antialiased;
+}
+
+/* ── TOP NAV ── */
+.top-nav {
+  display: flex; 
+  align-items: center; 
+  justify-content: space-between;
+  padding: 0 var(--space-06); 
+  border-bottom: 1px solid var(--color-border-subtle);
+  background: var(--elevation-overlay); 
+  backdrop-filter: blur(20px);
+  flex-shrink: 0; 
+  z-index: 200; 
+  height: 64px; /* Increased for better touch targets */
+}
+.nav-left { display: flex; align-items: center; gap: var(--space-04); }
+
+.logo { display:flex; align-items:center; gap: var(--space-03); }
+.logo-mark {
+  width: var(--space-12); 
+  height: var(--space-12); 
+  background: var(--color-action-primary); 
+  border-radius: var(--radius-md);
+  display: flex; 
+  align-items: center; 
+  justify-content: center; 
+  font-size: var(--size-sm);
+  box-shadow: 0 0 20px rgba(0,229,255,0.2); /* Reduced noise */
+}
+.logo-wordmark { 
+  font-family: var(--font-display); 
+  font-size: var(--size-xl); 
+  letter-spacing: 2px; 
+  line-height: var(--line-tight); 
+}
+.logo-wordmark em { color: var(--color-action-primary); font-style: normal; }
+
+.nav-links { display: flex; gap: var(--space-01); margin-left: var(--space-08); }
+.nav-link {
+  /* Enforce 44px min hit target vertically via padding */
+  padding: var(--space-03) var(--space-05); 
+  font-size: var(--size-xs); 
+  font-weight: 600; 
+  text-transform: uppercase;
+  letter-spacing: 1.5px; 
+  color: var(--color-text-muted); 
+  cursor: pointer;
+  border-bottom: 2px solid var(--transparent); 
+  transition: all var(--duration-micro) var(--ease-out);
+  display: flex; 
+  align-items: center; 
+  gap: var(--space-02);
+  border-radius: var(--radius-md) var(--radius-md) 0 0;
+}
+.nav-link:hover { color: var(--color-text-primary); background: rgba(255,255,255,0.03); }
+.nav-link:focus-visible { outline: 2px solid var(--color-action-primary); outline-offset: -2px; }
+.nav-link.active { 
+  color: var(--color-action-primary); 
+  border-bottom-color: var(--color-action-primary); 
+  background: rgba(0,229,255,0.05);
+}
+.nav-link .nav-icon { font-size: var(--size-sm); }
+
+.nav-right { display: flex; align-items: center; gap: var(--space-05); }
+.hstat { text-align: center; }
+.hstat-val { 
+  font-family: var(--font-mono); 
+  font-size: var(--size-base); 
+  font-weight: 600; 
+  color: var(--color-action-primary); 
+}
+.hstat-val.red { color: var(--color-status-critical); }
+.hstat-val.green { color: var(--color-status-success); }
+.hstat-val.yellow { color: var(--color-status-warning); }
+.hstat-lbl { 
+  font-size: 10px; /* Specific exception for micro-labels */
+  color: var(--color-text-muted); 
+  letter-spacing: 1.5px; 
+  text-transform: uppercase; 
+}
+.hstat-sep { width: 1px; height: var(--space-06); background: var(--color-border-subtle); }
+
+.live-pill {
+  display: flex; 
+  align-items: center; 
+  gap: var(--space-02);
+  /* Better contrast than raw opacity */
+  background: var(--slate-800); 
+  border: 1px solid var(--color-status-success);
+  border-radius: var(--radius-full); 
+  padding: var(--space-01) var(--space-03); 
+  font-size: 10px; 
+  color: var(--color-status-success);
+  font-family: var(--font-mono); 
+  letter-spacing: 1px;
+}
+.pulse { 
+  width: var(--space-02); 
+  height: var(--space-02); 
+  background: var(--color-status-success); 
+  border-radius: var(--radius-full); 
+  animation: blink 1.5s infinite var(--ease-out); 
+}
+@keyframes blink { 
+  0%,100% { opacity: 1; box-shadow: 0 0 6px var(--color-status-success); } 
+  50% { opacity: 0.3; box-shadow: none; } 
+}
+
+/* ── PAGE VIEWS ── */
+.page-container{flex:1;overflow:hidden;position:relative}
+.page-view{display:none;width:100%;height:100%;overflow:auto;position:absolute;inset:0}
+.page-view.active{display:flex}
+
+/* ══ DASHBOARD PAGE ══ */
+.dash-page { 
+  display: flex; 
+  flex-direction: column; 
+  padding: var(--space-06); 
+  gap: var(--space-06); 
+  overflow-y: auto; 
+}
+.dash-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: var(--space-04); }
+.stat-card {
+  background: var(--color-surface-lvl2); 
+  border: 1px solid var(--color-border-subtle); 
+  border-radius: var(--radius-lg);
+  padding: var(--space-05); 
+  position: relative; 
+  overflow: hidden;
+}
+.stat-card::before { content: ''; position: absolute; top: 0; left: 0; right: 0; height: 3px; border-radius: var(--radius-lg) var(--radius-lg) 0 0; }
+.stat-card.c::before { background: var(--color-action-primary); }
+.stat-card.g::before { background: var(--color-status-success); }
+.stat-card.y::before { background: var(--color-status-warning); }
+.stat-card.r::before { background: var(--color-status-critical); }
+.sc-label { 
+  font-size: 10px; 
+  color: var(--color-text-muted); 
+  letter-spacing: 2px; 
+  text-transform: uppercase; 
+  margin-bottom: var(--space-02); 
+}
+.sc-value { 
+  font-family: var(--font-mono); 
+  font-size: var(--size-2xl); 
+  font-weight: 700; 
+  line-height: var(--line-tight);
+}
+.sc-sub { font-size: var(--size-xs); color: var(--color-text-muted); margin-top: var(--space-01); }
+
+.dash-section-title { 
+  font-size: 11px; /* Specific micro-label */
+  color: var(--color-text-muted); 
+  letter-spacing: 2px; 
+  text-transform: uppercase; 
+  margin-bottom: 0; 
+}
+.zone-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: var(--space-03); }
+
+/* zone cards */
+.zone-card {
+  border: 1px solid var(--color-border-subtle); 
+  border-radius: var(--radius-lg); 
+  padding: var(--space-03);
+  cursor: pointer; 
+  transition: all var(--duration-state) var(--ease-out); 
+  background: var(--color-surface-lvl1); 
+  position: relative; 
+  overflow: hidden;
+}
+.zone-card::before { content: ''; position: absolute; left: 0; top: 0; bottom: 0; width: 3px; border-radius: 2px 0 0 2px; }
+.zone-card.good::before { background: var(--color-status-success); }
+.zone-card.warning::before { background: var(--color-status-warning); }
+.zone-card.critical::before { background: var(--color-status-critical); }
+.zone-card:hover { 
+  border-color: var(--color-action-primary); 
+  background: var(--color-surface-lvl3); 
+  transform: translateY(-2px); 
+}
+.zone-card:focus-visible { outline: 2px solid var(--color-action-primary); outline-offset: 2px; }
+
+.zc-head { display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: var(--space-02); }
+.zc-name { font-size: var(--size-sm); font-weight: 700; color: var(--color-text-primary); margin-top: 2px; }
+.zc-type { font-size: 9px; color: var(--color-text-muted); letter-spacing: 1.5px; text-transform: uppercase; margin-top: 2px; }
+.health-ring {
+  width: var(--space-12); 
+  height: var(--space-12); 
+  border-radius: var(--radius-full);
+  display: flex; 
+  align-items: center; 
+  justify-content: center;
+  font-family: var(--font-mono); 
+  font-size: var(--size-xs); 
+  font-weight: 600; 
+  flex-shrink: 0;
+}
+.health-ring.good { background: rgba(0,255,136,0.1); border: 2px solid var(--color-status-success); color: var(--color-status-success); }
+.health-ring.warning { background: rgba(255,214,10,0.1); border: 2px solid var(--color-status-warning); color: var(--color-status-warning); }
+.health-ring.critical { background: rgba(255,59,59,0.1); border: 2px solid var(--color-status-critical); color: var(--color-status-critical); animation: ring-alarm .8s infinite alternate var(--ease-out); }
+@keyframes ring-alarm { to { box-shadow: 0 0 12px var(--color-status-critical); } }
+.zc-metrics { display: grid; grid-template-columns: 1fr 1fr; gap: var(--space-01); margin-top: var(--space-02); }
+.zm { display: flex; justify-content: space-between; font-size: 10px; }
+.zm-k { color: var(--color-text-muted); }
+.zm-v { font-family: var(--font-mono); color: var(--color-text-secondary); }
+
+/* ══ MAP PAGE ══ */
+.map-page { flex-direction: column; }
+.map-toolbar {
+  display: flex; align-items: center; gap: var(--space-03); padding: var(--space-02) var(--space-04);
+  border-bottom: 1px solid var(--color-border-subtle); background: var(--color-surface-lvl2); flex-shrink: 0;
+}
+.tool-btn {
+  /* Enforce hit target vertically and horizontally */
+  min-height: 36px;
+  min-width: 44px;
+  padding: 0 var(--space-03); 
+  border-radius: var(--radius-md); 
+  border: 1px solid var(--color-border-subtle); 
+  background: var(--transparent);
+  color: var(--color-text-secondary); 
+  font-family: var(--font-sans); 
+  font-size: var(--size-xs); 
+  cursor: pointer;
+  transition: all var(--duration-micro) var(--ease-out); 
+  font-weight: 600; 
+  letter-spacing: 0.5px;
+}
+.tool-btn.active { background: var(--color-action-primary); color: var(--black); border-color: var(--color-action-primary); }
+.tool-btn:hover:not(.active) { border-color: var(--color-action-primary); color: var(--color-action-primary); }
+.tool-btn:focus-visible { outline: 2px solid var(--color-action-primary); outline-offset: 2px; }
+
+.metric-sel {
+  min-height: 36px;
+  background: var(--color-surface-lvl1); 
+  border: 1px solid var(--color-border-subtle); 
+  border-radius: var(--radius-md);
+  color: var(--color-text-primary); 
+  padding: 0 var(--space-03); 
+  font-family: var(--font-mono); 
+  font-size: var(--size-xs); 
+  outline: none;
+}
+.metric-sel:focus-visible { outline: 2px solid var(--color-action-primary); }
+
+.map-wrap { flex: 1; position: relative; overflow: hidden; background: var(--color-bg-base); }
+.map-legend {
+  position: absolute; bottom: var(--space-04); right: var(--space-04);
+  background: var(--elevation-overlay); border: 1px solid var(--color-border-subtle);
+  border-radius: var(--radius-lg); padding: var(--space-03) var(--space-04); pointer-events: none;
+}
+.leg-title { font-size: 9px; color: var(--color-text-muted); letter-spacing: 2px; text-transform: uppercase; margin-bottom: var(--space-02); }
+.leg-item { display: flex; align-items: center; gap: var(--space-02); font-size: 10px; margin-bottom: var(--space-01); }
+.leg-swatch { width: 12px; height: 12px; border-radius: 2px; }
+
+.map-tooltip {
+  position: absolute; background: var(--elevation-overlay); border: 1px solid var(--color-action-primary);
+  border-radius: var(--radius-lg); padding: var(--space-03) var(--space-04); pointer-events: none;
+  display: none; min-width: 200px; z-index: 50; font-size: var(--size-xs);
+  box-shadow: 0 0 20px rgba(0,229,255,0.15); /* Keep functional glow */
+}
+.tt-title { font-size: var(--size-sm); font-weight: 700; color: var(--color-action-primary); margin-bottom: var(--space-02); font-family: var(--font-display); letter-spacing: 1px; }
+.tt-row { display: flex; justify-content: space-between; gap: var(--space-05); margin-bottom: 4px; }
+.tt-key { color: var(--color-text-muted); }
+.tt-val { font-family: var(--font-mono); font-weight: 600; }
+
+.nlp-bar {
+  display: flex; align-items: center; gap: var(--space-03); padding: var(--space-02) var(--space-04);
+  border-top: 1px solid var(--color-border-subtle); background: var(--elevation-overlay); flex-shrink: 0;
+}
+.nlp-input {
+  flex: 1; background: var(--color-surface-lvl1); border: 1px solid var(--color-border-subtle); border-radius: var(--radius-md);
+  padding: var(--space-02) var(--space-03); color: var(--color-text-primary); font-family: var(--font-mono); font-size: var(--size-xs); outline: none;
+  min-height: 44px; /* Hit target */
+}
+.nlp-input:focus { border-color: var(--color-action-primary); }
+.nlp-btn {
+  background: var(--color-action-primary); color: var(--black); border: none; border-radius: var(--radius-md);
+  padding: 0 var(--space-04); font-family: var(--font-sans); font-weight: 700; font-size: var(--size-xs);
+  cursor: pointer; white-space: nowrap; min-height: 44px; /* Hit target */
+  transition: all var(--duration-micro) var(--ease-out);
+}
+.nlp-btn:hover { background: var(--color-action-primary-hover); }
+.nlp-btn:focus-visible { outline: 2px solid var(--white); outline-offset: 2px; }
+
+.nlp-chips { display: flex; gap: var(--space-02); flex-wrap: nowrap; overflow-x: auto; padding-right: var(--space-02); scrollbar-width: none; }
+.nlp-chips::-webkit-scrollbar { display: none; }
+.nlp-chip {
+  background: var(--color-surface-lvl1); border: 1px solid var(--color-border-subtle); border-radius: var(--radius-full);
+  padding: 0 var(--space-03); min-height: 36px; display: flex; align-items: center;
+  font-size: 10px; cursor: pointer; white-space: nowrap;
+  color: var(--color-text-muted); transition: all var(--duration-micro) var(--ease-out); flex-shrink: 0;
+}
+.nlp-chip:hover { border-color: var(--color-action-primary); color: var(--color-action-primary); }
+.nlp-result {
+  font-size: var(--size-xs); color: var(--color-text-primary); font-family: var(--font-mono);
+  background: var(--color-surface-lvl1); border: 1px solid var(--color-border-subtle); border-radius: var(--radius-md);
+  padding: var(--space-02) var(--space-03); min-width: 300px; max-width: 400px;
+}
+
+/* ══ ANALYTICS PAGE ══ */
+.analytics-page { display: flex; flex-direction: column; padding: var(--space-06); gap: var(--space-06); overflow-y: auto; }
+.analytics-header { display: flex; align-items: center; justify-content: space-between; }
+.chart-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: var(--space-04); }
+.chart-card {
+  background: var(--color-surface-lvl2); 
+  border: 1px solid var(--color-border-subtle); 
+  border-radius: var(--radius-lg);
+  padding: var(--space-05);
+}
+.chart-card-title { font-size: 10px; color: var(--color-text-muted); letter-spacing: 2px; text-transform: uppercase; margin-bottom: var(--space-03); }
+.sparkline-wrap { position: relative; height: 120px; }
+canvas.sparkline { width: 100% !important; height: 120px !important; }
+.zone-select {
+  background: var(--color-surface-lvl1); 
+  border: 1px solid var(--color-border-subtle); 
+  border-radius: var(--radius-md);
+  color: var(--color-text-primary); 
+  padding: var(--space-02) var(--space-03); 
+  font-family: var(--font-mono); 
+  font-size: var(--size-xs); 
+  outline: none;
+  min-height: 44px; /* Hit target */
+}
+.zone-select:focus-visible { outline: 2px solid var(--color-action-primary); }
+
+.correlation-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: var(--space-03); }
+.corr-card {
+  background: var(--color-surface-lvl1); 
+  border: 1px solid var(--color-border-subtle); 
+  border-radius: var(--radius-lg); /* Consistent with zone-cards */
+  padding: var(--space-03); 
+  text-align: center;
+}
+.corr-val { font-family: var(--font-mono); font-size: var(--size-xl); font-weight: 700; line-height: var(--line-tight); color: var(--color-text-secondary); }
+.corr-lbl { font-size: 10px; color: var(--color-text-muted); margin-top: var(--space-01); letter-spacing: 1px; text-transform: uppercase; }
+
+/* ══ ALERTS PAGE ══ */
+.alerts-page { display: flex; flex-direction: column; padding: var(--space-06); gap: var(--space-04); overflow-y: auto; }
+.alert-item {
+  border-left: 3px solid var(--color-status-critical); 
+  padding: var(--space-03) var(--space-04);
+  background: rgba(255,59,59,0.05); /* Specific alpha handling */
+  border-radius: 0 var(--radius-md) var(--radius-md) 0;
+  animation: slide-in .3s var(--ease-out);
+}
+.alert-item.warning { border-left-color: var(--color-status-warning); background: rgba(255,214,10,0.05); }
+.alert-zone { font-size: var(--size-sm); font-weight: 700; color: var(--color-text-primary); }
+.alert-msg { font-size: var(--size-xs); color: var(--color-text-muted); margin-top: 4px; }
+.alert-time { font-size: 10px; color: var(--color-text-disabled); margin-top: 4px; font-family: var(--font-mono); }
+@keyframes slide-in { from { opacity: 0; transform: translateX(-8px); } to { opacity: 1; transform: translateX(0); } }
+
+.alert-header { display: flex; align-items: center; justify-content: space-between; gap: var(--space-04); }
+.alert-stat {
+  background: var(--color-surface-lvl2); 
+  border: 1px solid var(--color-border-subtle); 
+  border-radius: var(--radius-md);
+  padding: var(--space-03) var(--space-05); 
+  text-align: center;
+}
+.alert-stat-val { font-family: var(--font-mono); font-size: var(--size-xl); font-weight: 700; color: var(--color-status-critical); }
+.alert-stat-lbl { font-size: 9px; color: var(--color-text-muted); letter-spacing: 1.5px; text-transform: uppercase; margin-top: 4px; }
+
+/* ══ PLANNER PAGE ══ */
+.planner-page { display: flex; height: 100%; overflow: hidden; }
+.planner-panel {
+  width: 420px; flex-shrink: 0; border-right: 1px solid var(--color-border-subtle);
+  background: var(--color-surface-lvl2); padding: var(--space-06); overflow-y: auto;
+}
+.planner-title { font-family: var(--font-display); font-size: var(--size-2xl); letter-spacing: 2px; color: var(--color-action-secondary); margin-bottom: var(--space-02); }
+.planner-sub { font-size: var(--size-xs); color: var(--color-text-muted); margin-bottom: var(--space-05); line-height: var(--line-snug); }
+.infra-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: var(--space-02); margin-bottom: var(--space-05); }
+.infra-btn {
+  background: var(--color-surface-lvl1); 
+  border: 1px solid var(--color-border-subtle); 
+  border-radius: var(--radius-md);
+  padding: var(--space-03) var(--space-02); 
+  text-align: center; cursor: pointer; transition: all var(--duration-state) var(--ease-out);
+  min-height: 44px; /* Hit target */
+}
+.infra-btn:focus-visible { outline: 2px solid var(--color-action-secondary); outline-offset: 2px; }
+.infra-btn:hover { border-color: var(--color-action-secondary); transform: translateY(-2px); }
+.infra-btn.active { border-color: var(--color-action-secondary); background: var(--purple-900); box-shadow: 0 0 15px rgba(168,85,247,0.15); }
+.infra-icon { font-size: var(--size-xl); margin-bottom: 4px; }
+.infra-name { font-size: 10px; font-weight: 700; letter-spacing: 1px; text-transform: uppercase; color: var(--color-text-muted); }
+.infra-btn.active .infra-name { color: var(--color-action-secondary); }
+
+.plan-btn {
+  width: 100%; padding: var(--space-03); border: none; border-radius: var(--radius-md);
+  /* Using global tokens for the strict gradient brand */
+  background: linear-gradient(135deg, #7c3aed, var(--purple-500)); color: var(--white);
+  font-family: var(--font-sans); font-size: var(--size-sm); font-weight: 700; cursor: pointer;
+  letter-spacing: 1px; transition: all var(--duration-micro) var(--ease-out); margin-bottom: var(--space-05);
+  min-height: 48px;
+}
+.plan-btn:focus-visible { outline: 2px solid var(--white); outline-offset: 2px; }
+.plan-btn:hover { transform: translateY(-1px); box-shadow: 0 4px 20px rgba(168,85,247,0.4); }
+.plan-btn:active { transform: translateY(0); }
+
+/* Recommendation cards */
+.rec-card {
+  background: var(--color-surface-lvl1); 
+  border: 1px solid var(--color-border-subtle); 
+  border-radius: var(--radius-lg);
+  padding: var(--space-03); margin-bottom: var(--space-02); cursor: pointer; 
+  transition: all var(--duration-state) var(--ease-out); position: relative; overflow: hidden;
+  min-height: 44px;
+}
+.rec-card:focus-visible { outline: 2px solid var(--color-action-secondary); outline-offset: 2px; }
+.rec-card::before { content: ''; position: absolute; left: 0; top: 0; bottom: 0; width: 3px; }
+.rec-card.rank-1::before { background: var(--color-action-secondary); }
+.rec-card.rank-2::before { background: var(--color-action-primary); }
+.rec-card.rank-3::before { background: var(--color-text-muted); }
+.rec-card:hover { border-color: var(--color-action-secondary); transform: translateX(4px); }
+.rec-card.selected { border-color: var(--color-action-secondary); background: var(--purple-900); }
+
+.rec-rank {
+  position: absolute; top: var(--space-02); right: var(--space-02); width: var(--space-06); height: var(--space-06); border-radius: var(--radius-full);
+  display: flex; align-items: center; justify-content: center;
+  font-family: var(--font-mono); font-size: 10px; font-weight: 700;
+}
+.rec-rank.r1 { background: var(--color-action-secondary); color: var(--white); }
+.rec-rank.r2 { background: rgba(0,229,255,0.2); color: var(--color-action-primary); }
+.rec-rank.r3 { background: rgba(74,100,128,0.3); color: var(--color-text-muted); }
+.rec-zone { font-size: var(--size-sm); font-weight: 700; margin-bottom: 2px; color: var(--color-text-primary); }
+.rec-area { font-size: 9px; color: var(--color-text-muted); letter-spacing: 1.5px; text-transform: uppercase; }
+
+.rec-score { display: flex; align-items: center; gap: var(--space-02); margin-top: var(--space-02); }
+.rec-score-bar { flex: 1; height: 6px; background: var(--color-surface-lvl3); border-radius: 3px; overflow: hidden; }
+.rec-score-fill { height: 100%; border-radius: 3px; background: linear-gradient(90deg, #7c3aed, var(--purple-500)); transition: width .5s var(--ease-out); }
+.rec-score-val { font-family: var(--font-mono); font-size: 11px; color: var(--color-action-secondary); width: 36px; text-align: right; }
+
+/* Impact panel */
+.planner-impact { flex: 1; padding: var(--space-06); overflow-y: auto; background: var(--color-bg-base); }
+.impact-header { font-family: var(--font-display); font-size: var(--size-xl); letter-spacing: 2px; color: var(--color-action-secondary); margin-bottom: var(--space-04); }
+.impact-zone-name { font-size: var(--size-lg); font-weight: 700; margin-bottom: var(--space-01); color: var(--color-text-primary); }
+.impact-zone-area { font-size: 10px; color: var(--color-text-muted); letter-spacing: 1.5px; text-transform: uppercase; margin-bottom: var(--space-05); }
+
+.why-section { margin-bottom: var(--space-06); }
+.why-title { font-size: 10px; color: var(--color-text-muted); letter-spacing: 2px; text-transform: uppercase; margin-bottom: var(--space-02); }
+.why-list { list-style: none; padding: 0; }
+.why-item {
+  display: flex; align-items: flex-start; gap: var(--space-02);
+  padding: var(--space-02) var(--space-03); background: var(--color-surface-lvl2); border: 1px solid var(--color-border-subtle);
+  border-radius: var(--radius-md); margin-bottom: var(--space-01); font-size: var(--size-xs); line-height: var(--line-base);
+}
+.why-icon { font-size: var(--size-base); flex-shrink: 0; margin-top: 1px; }
+
+.impact-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: var(--space-03); margin-bottom: var(--space-06); }
+.impact-card {
+  background: var(--color-surface-lvl2); border: 1px solid var(--color-border-subtle); border-radius: var(--radius-md);
+  padding: var(--space-03); text-align: center; position: relative; overflow: hidden;
+}
+.impact-card::before { content: ''; position: absolute; top: 0; left: 0; right: 0; height: 2px; }
+.impact-card.positive::before { background: var(--color-status-success); }
+.impact-card.negative::before { background: var(--color-status-critical); }
+.impact-metric { font-size: 9px; color: var(--color-text-muted); letter-spacing: 1.5px; text-transform: uppercase; margin-bottom: var(--space-02); }
+.impact-before { font-family: var(--font-mono); font-size: var(--size-base); color: var(--color-text-disabled); text-decoration: line-through; }
+.impact-arrow { font-size: var(--size-sm); margin: var(--space-01) 0; }
+.impact-after { font-family: var(--font-mono); font-size: var(--size-lg); font-weight: 700; }
+.impact-delta { font-family: var(--font-mono); font-size: 11px; margin-top: 4px; font-weight: 600; }
+
+.map-link-btn {
+  display: inline-flex; align-items: center; gap: var(--space-02);
+  background: var(--purple-900); border: 1px solid var(--color-action-secondary);
+  border-radius: var(--radius-md); padding: var(--space-02) var(--space-05); color: var(--color-action-secondary);
+  font-family: var(--font-sans); font-size: var(--size-xs); font-weight: 700; cursor: pointer;
+  transition: all var(--duration-micro) var(--ease-out); letter-spacing: 0.5px; min-height: 44px;
+}
+.map-link-btn:focus-visible { outline: 2px solid var(--color-action-secondary); outline-offset: 2px; }
+.map-link-btn:hover { background: rgba(168,85,247,0.2); transform: translateY(-1px); }
+
+/* scrollbar */
+::-webkit-scrollbar { width: 5px; height: 5px; }
+::-webkit-scrollbar-track { background: var(--color-bg-base); }
+::-webkit-scrollbar-thumb { background: var(--color-border-strong); border-radius: 3px; }
+
+.scanlines { 
+  position: fixed; inset: 0; pointer-events: none; z-index: 1000;
+  background: repeating-linear-gradient(0deg, transparent, transparent 2px, rgba(0,0,0,.03) 2px, rgba(0,0,0,.03) 4px);
+}
+
+
