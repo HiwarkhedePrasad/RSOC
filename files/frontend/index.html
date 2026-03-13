@@ -12,6 +12,18 @@
 <link rel="stylesheet" href="styles.css">
 </head>
 <body>
+<!-- Loading Screen -->
+<div class="loading-screen" id="loadingScreen">
+  <div class="loading-content">
+    <div class="loading-logo"></div>
+    <div class="loading-text">NEXACITY</div>
+    <div class="loading-subtitle">URBAN INTELLIGENCE SYSTEM</div>
+    <div class="loading-bar">
+      <div class="loading-progress"></div>
+    </div>
+  </div>
+</div>
+
 <div class="scanlines"></div>
 
 <!-- ══════════ TOP NAVIGATION ══════════ -->
@@ -27,6 +39,9 @@
       </div>
       <div class="nav-link" data-page="map" onclick="switchPage('map')">
         <span class="nav-icon">🗺️</span> 3D Map
+      </div>
+      <div class="nav-link" data-page="upload" onclick="switchPage('upload')">
+        <span class="nav-icon">📁</span> Upload Data
       </div>
       <div class="nav-link" data-page="analytics" onclick="switchPage('analytics')">
         <span class="nav-icon">📈</span> Analytics
@@ -78,6 +93,7 @@
           <option value="health">Zone Health Score</option>
         </select>
         <div style="margin-left:auto;display:flex;gap:8px;align-items:center">
+          <button class="tool-btn" id="suggestions-toggle-btn" onclick="toggleSuggestions()">🔼 Show Suggestions</button>
           <button class="tool-btn" onclick="setSpeed(1)">1×</button>
           <button class="tool-btn active" onclick="setSpeed(2)">2×</button>
           <button class="tool-btn" onclick="setSpeed(5)">5×</button>
@@ -113,21 +129,314 @@
     </div>
   </div>
 
+  <!-- ═══ UPLOAD PAGE ═══ -->
+  <div class="page-view" id="page-upload">
+    <div class="upload-page">
+      <div class="upload-header">
+        <div class="dash-section-title">📁 DATASET UPLOAD & PROCESSING</div>
+        <div class="upload-subtitle">Upload CSV/Excel files for traffic, pollution, transportation, and population data</div>
+      </div>
+
+      <!-- Upload Area -->
+      <div class="upload-container">
+        <div class="upload-zone" id="uploadZone">
+          <div class="upload-icon">📊</div>
+          <div class="upload-text">
+            <div class="upload-title">Drop files here or click to browse</div>
+            <div class="upload-subtitle">Supports CSV, Excel (.xlsx, .xls) - Max 50MB</div>
+          </div>
+          <input type="file" id="fileInput" multiple accept=".csv,.xlsx,.xls" style="display: none">
+          <button class="upload-btn" onclick="document.getElementById('fileInput').click()">Choose Files</button>
+        </div>
+      </div>
+
+      <!-- Data Processing Status -->
+      <div class="processing-status" id="processingStatus" style="display: none;">
+        <div class="processing-header">
+          <div class="processing-title">🔄 Data Processing</div>
+          <div class="processing-progress">
+            <div class="progress-bar">
+              <div class="progress-fill" id="progressFill"></div>
+            </div>
+            <div class="progress-text" id="progressText">0%</div>
+          </div>
+        </div>
+        <div class="processing-steps">
+          <div class="step-item" id="step1">
+            <div class="step-icon">📁</div>
+            <div class="step-text">File Upload</div>
+          </div>
+          <div class="step-item" id="step2">
+            <div class="step-icon">🧹</div>
+            <div class="step-text">Data Cleaning</div>
+          </div>
+          <div class="step-item" id="step3">
+            <div class="step-icon">📊</div>
+            <div class="step-text">Normalization</div>
+          </div>
+          <div class="step-item" id="step4">
+            <div class="step-icon">🔍</div>
+            <div class="step-text">Analysis</div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Uploaded Files List -->
+      <div class="uploaded-files" id="uploadedFiles">
+        <div class="files-header">
+          <div class="dash-section-title">📋 Uploaded Datasets</div>
+          <button class="clear-btn" onclick="clearAllFiles()">Clear All</button>
+        </div>
+        <div class="files-list" id="filesList"></div>
+      </div>
+
+      <!-- Data Quality Report -->
+      <div class="quality-report" id="qualityReport" style="display: none;">
+        <div class="dash-section-title">📊 Data Quality Report</div>
+        <div class="quality-grid">
+          <div class="quality-card">
+            <div class="quality-icon">✅</div>
+            <div class="quality-title">Valid Records</div>
+            <div class="quality-value" id="validRecords">0</div>
+          </div>
+          <div class="quality-card">
+            <div class="quality-icon">⚠️</div>
+            <div class="quality-title">Missing Values</div>
+            <div class="quality-value" id="missingValues">0</div>
+          </div>
+          <div class="quality-card">
+            <div class="quality-icon">🚫</div>
+            <div class="quality-title">Outliers</div>
+            <div class="quality-value" id="outliers">0</div>
+          </div>
+          <div class="quality-card">
+            <div class="quality-icon">📈</div>
+            <div class="quality-title">Data Completeness</div>
+            <div class="quality-value" id="completeness">0%</div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
   <!-- ═══ ANALYTICS PAGE ═══ -->
   <div class="page-view" id="page-analytics">
     <div class="analytics-page">
       <div class="analytics-header">
-        <div class="dash-section-title">LIVE METRICS</div>
-        <select class="zone-select" id="analytics-zone-select" onchange="selectedZone=this.value;updateAnalytics()"></select>
+        <div class="dash-section-title">📈 SMART CITY DATA INSIGHTS</div>
+        <select class="zone-select" id="analytics-zone-select" onchange="selectedZone=this.value;updateAnalytics()">
+          <option value="all">🌐 All Zones</option>
+        </select>
       </div>
-      <div class="chart-grid">
-        <div class="chart-card"><div class="chart-card-title">Air Quality (AQI) — Last 60s</div><div class="sparkline-wrap"><canvas class="sparkline" id="sp-aqi"></canvas></div></div>
-        <div class="chart-card"><div class="chart-card-title">Traffic Congestion — Last 60s</div><div class="sparkline-wrap"><canvas class="sparkline" id="sp-traffic"></canvas></div></div>
-        <div class="chart-card"><div class="chart-card-title">Energy Load (kWh) — Last 60s</div><div class="sparkline-wrap"><canvas class="sparkline" id="sp-energy"></canvas></div></div>
-        <div class="chart-card"><div class="chart-card-title">Water Usage (L/hr) — Last 60s</div><div class="sparkline-wrap"><canvas class="sparkline" id="sp-water"></canvas></div></div>
+
+      <!-- Trend & Correlation Analysis -->
+      <div class="analysis-section">
+        <div class="dash-section-title">🔍 TREND & CORRELATION ANALYSIS</div>
+        <div class="correlation-grid" id="correlationGrid">
+          <div class="correlation-card">
+            <div class="correlation-header">
+              <div class="correlation-title">🚗 Traffic ↔ 🌫️ Pollution</div>
+              <div class="correlation-value strong">0.87</div>
+            </div>
+            <div class="correlation-desc">Strong positive correlation between traffic congestion and pollution levels</div>
+            <div class="correlation-chart">
+              <canvas id="trafficPollutionChart"></canvas>
+            </div>
+          </div>
+          <div class="correlation-card">
+            <div class="correlation-header">
+              <div class="correlation-title">👥 Population ↔ 🚌 Transport</div>
+              <div class="correlation-value medium">0.65</div>
+            </div>
+            <div class="correlation-desc">Moderate correlation between population activity and public transport usage</div>
+            <div class="correlation-chart">
+              <canvas id="populationTransportChart"></canvas>
+            </div>
+          </div>
+          <div class="correlation-card">
+            <div class="correlation-header">
+              <div class="correlation-title">⚡ Energy ↔ 🏭 Industry</div>
+              <div class="correlation-value strong">0.92</div>
+            </div>
+            <div class="correlation-desc">Very strong correlation in industrial zones between energy and production</div>
+            <div class="correlation-chart">
+              <canvas id="energyIndustryChart"></canvas>
+            </div>
+          </div>
+          <div class="correlation-card">
+            <div class="correlation-header">
+              <div class="correlation-title">🕐 Time ↔ 📊 Activity</div>
+              <div class="correlation-value weak">0.34</div>
+            </div>
+            <div class="correlation-desc">Weak correlation - shows peak hours and off-peak patterns</div>
+            <div class="correlation-chart">
+              <canvas id="timeActivityChart"></canvas>
+            </div>
+          </div>
+        </div>
       </div>
-      <div class="dash-section-title" style="margin-top:8px">ZONE CORRELATION SUMMARY</div>
-      <div class="correlation-grid" id="corr-grid"></div>
+
+      <!-- Peak Usage Analysis -->
+      <div class="analysis-section">
+        <div class="dash-section-title">⏰ PEAK USAGE ANALYSIS</div>
+        <div class="peak-analysis-grid">
+          <div class="peak-card">
+            <div class="peak-header">
+              <div class="peak-title">🚗 Traffic Peak Hours</div>
+              <div class="peak-time">8:00-9:00 AM</div>
+            </div>
+            <div class="peak-details">
+              <div class="peak-stat">
+                <div class="peak-label">Average Congestion</div>
+                <div class="peak-value">78%</div>
+              </div>
+              <div class="peak-stat">
+                <div class="peak-label">Affected Zones</div>
+                <div class="peak-value">6/12</div>
+              </div>
+            </div>
+            <div class="peak-chart">
+              <canvas id="trafficPeakChart"></canvas>
+            </div>
+          </div>
+          <div class="peak-card">
+            <div class="peak-header">
+              <div class="peak-title">🚌 Transport Peak Hours</div>
+              <div class="peak-time">5:00-6:00 PM</div>
+            </div>
+            <div class="peak-details">
+              <div class="peak-stat">
+                <div class="peak-label">Max Usage</div>
+                <div class="peak-value">92%</div>
+              </div>
+              <div class="peak-stat">
+                <div class="peak-label">Popular Routes</div>
+                <div class="peak-value">8 routes</div>
+              </div>
+            </div>
+            <div class="peak-chart">
+              <canvas id="transportPeakChart"></canvas>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Predictive Analysis -->
+      <div class="analysis-section">
+        <div class="dash-section-title">🤖 PREDICTIVE ANALYSIS</div>
+        <div class="prediction-grid">
+          <div class="prediction-card">
+            <div class="prediction-header">
+              <div class="prediction-title">🚨 High Congestion Zones</div>
+              <div class="prediction-confidence">Confidence: 87%</div>
+            </div>
+            <div class="prediction-list">
+              <div class="prediction-item">
+                <div class="prediction-zone">Sitabuldi</div>
+                <div class="prediction-risk high">High Risk</div>
+                <div class="prediction-time">Next 2 hours</div>
+              </div>
+              <div class="prediction-item">
+                <div class="prediction-zone">Gandhibagh</div>
+                <div class="prediction-risk medium">Medium Risk</div>
+                <div class="prediction-time">Next 4 hours</div>
+              </div>
+              <div class="prediction-item">
+                <div class="prediction-zone">Itwari</div>
+                <div class="prediction-risk high">High Risk</div>
+                <div class="prediction-time">Next 3 hours</div>
+              </div>
+            </div>
+          </div>
+          <div class="prediction-card">
+            <div class="prediction-header">
+              <div class="prediction-title">🌫️ Pollution Hotspots</div>
+              <div class="prediction-confidence">Confidence: 92%</div>
+            </div>
+            <div class="prediction-list">
+              <div class="prediction-item">
+                <div class="prediction-zone">MIDC Hingna</div>
+                <div class="prediction-risk critical">Critical</div>
+                <div class="prediction-time">Next 1 hour</div>
+              </div>
+              <div class="prediction-item">
+                <div class="prediction-zone">Wathoda</div>
+                <div class="prediction-risk high">High Risk</div>
+                <div class="prediction-time">Next 2 hours</div>
+              </div>
+              <div class="prediction-item">
+                <div class="prediction-zone">Kamptee Road</div>
+                <div class="prediction-risk medium">Medium Risk</div>
+                <div class="prediction-time">Next 3 hours</div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Statistical Analysis -->
+      <div class="analysis-section">
+        <div class="dash-section-title">📊 STATISTICAL ANALYSIS</div>
+        <div class="stats-grid">
+          <div class="stats-card">
+            <div class="stats-header">
+              <div class="stats-title">Traffic Flow Analysis</div>
+              <div class="stats-period">Last 24 hours</div>
+            </div>
+            <div class="stats-metrics">
+              <div class="stats-metric">
+                <div class="metric-label">Mean Flow</div>
+                <div class="metric-value">1,247 vehicles/hr</div>
+              </div>
+              <div class="stats-metric">
+                <div class="metric-label">Std Deviation</div>
+                <div class="metric-value">±342</div>
+              </div>
+              <div class="stats-metric">
+                <div class="metric-label">Peak Flow</div>
+                <div class="metric-value">2,891 vehicles/hr</div>
+              </div>
+            </div>
+          </div>
+          <div class="stats-card">
+            <div class="stats-header">
+              <div class="stats-title">Pollution Level Analysis</div>
+              <div class="stats-period">Last 24 hours</div>
+            </div>
+            <div class="stats-metrics">
+              <div class="stats-metric">
+                <div class="metric-label">Mean AQI</div>
+                <div class="metric-value">142</div>
+              </div>
+              <div class="stats-metric">
+                <div class="metric-label">Std Deviation</div>
+                <div class="metric-value">±28</div>
+              </div>
+              <div class="stats-metric">
+                <div class="metric-label">Peak AQI</div>
+                <div class="metric-value">287</div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Original Charts -->
+      <div class="chart-section">
+        <div class="dash-section-title">📈 LIVE METRICS</div>
+        <div class="chart-grid">
+          <div class="chart-card"><div class="chart-card-title">Air Quality (AQI) — Last 60s</div><div class="sparkline-wrap"><canvas class="sparkline" id="sp-aqi"></canvas></div></div>
+          <div class="chart-card"><div class="chart-card-title">Traffic Congestion — Last 60s</div><div class="sparkline-wrap"><canvas class="sparkline" id="sp-traffic"></canvas></div></div>
+          <div class="chart-card"><div class="chart-card-title">Energy Load (kWh) — Last 60s</div><div class="sparkline-wrap"><canvas class="sparkline" id="sp-energy"></canvas></div></div>
+          <div class="chart-card"><div class="chart-card-title">Water Usage (L/hr) — Last 60s</div><div class="sparkline-wrap"><canvas class="sparkline" id="sp-water"></canvas></div></div>
+        </div>
+      </div>
+
+      <!-- Zone Correlation Summary -->
+      <div class="correlation-summary">
+        <div class="dash-section-title">🔗 ZONE CORRELATION SUMMARY</div>
+        <div class="correlation-grid" id="corr-grid"></div>
+      </div>
     </div>
   </div>
 

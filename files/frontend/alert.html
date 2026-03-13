@@ -28,6 +28,8 @@
   --red-dim: rgba(255,59,59,0.10);
   --water: #00b4d8;
   --water-dim: rgba(0,180,216,0.12);
+  --energy: #ffd60a;
+  --energy-dim: rgba(255,214,10,0.12);
   --font-sans: 'Outfit', sans-serif;
   --font-mono: 'IBM Plex Mono', monospace;
   --font-display: 'Bebas Neue', cursive;
@@ -156,6 +158,7 @@ body {
 .stat-chip.crit .stat-val { color: var(--red); }
 .stat-chip.warn .stat-val { color: var(--yellow); }
 .stat-chip.water .stat-val { color: var(--water); }
+.stat-chip.energy .stat-val { color: var(--energy); }
 
 /* filters */
 .filter-row {
@@ -180,6 +183,7 @@ body {
 .filter-btn:hover { border-color: var(--cyan); color: var(--cyan); }
 .filter-btn.active { border-color: var(--cyan); background: var(--cyan-dim); color: var(--cyan); }
 .filter-btn.water-filter.active { border-color: var(--water); background: var(--water-dim); color: var(--water); }
+.filter-btn.energy-filter.active { border-color: var(--energy); background: var(--energy-dim); color: var(--energy); }
 
 /* alert list */
 .alert-list {
@@ -224,6 +228,10 @@ body {
   background: var(--water-dim);
   border-left: 3px solid var(--water);
 }
+.alert-card.energy-alert {
+  background: var(--energy-dim);
+  border-left: 3px solid var(--energy);
+}
 .alert-card:hover {
   transform: translateX(4px);
   box-shadow: 0 4px 20px rgba(0,0,0,0.4);
@@ -237,6 +245,11 @@ body {
   border: 1px solid var(--water) !important;
   border-left: 3px solid var(--water) !important;
   box-shadow: 0 0 20px rgba(0,180,216,0.15);
+}
+.alert-card.energy-alert.active {
+  border: 1px solid var(--energy) !important;
+  border-left: 3px solid var(--energy) !important;
+  box-shadow: 0 0 20px rgba(255,214,10,0.15);
 }
 
 .alert-top {
@@ -262,6 +275,7 @@ body {
 .alert-badge.critical { color: var(--red); border-color: var(--red); background: rgba(255,59,59,0.1); }
 .alert-badge.warning  { color: var(--yellow); border-color: var(--yellow); background: rgba(255,214,10,0.1); }
 .alert-badge.water    { color: var(--water); border-color: var(--water); background: rgba(0,180,216,0.1); }
+.alert-badge.energy   { color: var(--energy); border-color: var(--energy); background: rgba(255,214,10,0.1); }
 
 .alert-msg { font-size: 12px; color: var(--muted); line-height: 1.4; margin-bottom: 6px; }
 .alert-meta {
@@ -272,17 +286,19 @@ body {
 .alert-time { font-size: 10px; color: var(--disabled); font-family: var(--font-mono); }
 .alert-metric { font-size: 10px; font-family: var(--font-mono); color: var(--cyan); }
 
-/* water click hint */
-.water-hint {
+/* click hints */
+.water-hint, .energy-hint {
   font-size: 10px;
-  color: var(--water);
   display: flex;
   align-items: center;
   gap: 4px;
   margin-top: 4px;
   font-weight: 600;
 }
+.water-hint { color: var(--water); }
 .water-hint::before { content: '💧'; }
+.energy-hint { color: var(--energy); }
+.energy-hint::before { content: '⚡'; }
 
 /* ─── RIGHT PANEL ─────────────────────────── */
 .right-panel {
@@ -292,15 +308,15 @@ body {
   overflow: hidden;
 }
 
-/* ── WATER MAP VIEW ── */
-.water-view {
+/* ── MAP VIEWS ── */
+.water-view, .energy-view {
   flex: 1;
   display: none;
   flex-direction: column;
   padding: 20px;
   overflow: hidden;
 }
-.water-view.visible { display: flex; }
+.water-view.visible, .energy-view.visible { display: flex; }
 
 .water-header {
   display: flex;
@@ -636,6 +652,10 @@ canvas#pipe-canvas {
           <div class="stat-val" id="stat-water">0</div>
           <div class="stat-lbl">Water</div>
         </div>
+        <div class="stat-chip energy">
+          <div class="stat-val" id="stat-energy">0</div>
+          <div class="stat-lbl">Energy</div>
+        </div>
       </div>
     </div>
 
@@ -645,6 +665,7 @@ canvas#pipe-canvas {
       <button class="filter-btn" data-filter="critical" onclick="setFilter('critical',this)">Critical</button>
       <button class="filter-btn" data-filter="warning" onclick="setFilter('warning',this)">Warning</button>
       <button class="filter-btn water-filter" data-filter="water" onclick="setFilter('water',this)">💧 Water</button>
+      <button class="filter-btn energy-filter" data-filter="energy" onclick="setFilter('energy',this)">⚡ Energy</button>
     </div>
 
     <div class="alert-list" id="alert-list"></div>
@@ -656,7 +677,66 @@ canvas#pipe-canvas {
     <!-- Empty state -->
     <div class="empty-state" id="empty-state">
       <div class="empty-icon">📡</div>
-      <div class="empty-text">Select an alert to view details.<br>Click any <strong style="color:var(--water)">💧 Water</strong> alert to open the pipe network simulation and take direct action.</div>
+      <div class="empty-text">Select an alert to view details.<br>Click any <strong style="color:var(--water)">💧 Water</strong> or <strong style="color:var(--energy)">⚡ Energy</strong> alert to open the simulation and take direct action.</div>
+    </div>
+
+    <!-- Energy Map View -->
+    <div class="energy-view" id="energy-view">
+      <div class="water-header">
+        <div class="water-title-block">
+          <div class="water-title" style="color:var(--energy);">⚡ ENERGY GRID MAP</div>
+          <div class="water-subtitle" id="energy-zone-name">Zone — Grid Simulation Active</div>
+        </div>
+        <div class="water-controls">
+          <button class="shutoff-btn stop" id="isolate-btn" onclick="executeIsolation()">
+            🔌 ISOLATE GRID
+          </button>
+          <button class="shutoff-btn restore" id="restore-power-btn" onclick="restorePower()" style="display:none">
+            ✅ RESTORE POWER
+          </button>
+          <button class="close-water-btn" onclick="closeEnergyView()">✕</button>
+        </div>
+      </div>
+
+      <!-- Status bar -->
+      <div class="water-status-bar active-leak" id="energy-status-bar" style="border-color:var(--red);color:var(--red);background:rgba(255,59,59,0.08);">
+        <span class="status-icon">⚠️</span>
+        <span id="energy-status-text">OVERLOAD DETECTED — Transformer stress critical. Immediate isolation recommended.</span>
+        <span class="status-saved" id="energy-status-saved"></span>
+      </div>
+
+      <!-- Stats -->
+      <div class="water-stats">
+        <div class="wstat" id="estat-flow" style="--water:var(--energy);">
+          <div class="wstat-label">Current Load</div>
+          <div class="wstat-val danger" id="es-load">--</div>
+          <div class="wstat-unit">kWh</div>
+        </div>
+        <div class="wstat" id="estat-normal" style="--water:var(--energy);">
+          <div class="wstat-label">Nominal Load</div>
+          <div class="wstat-val" id="es-normal" style="color:var(--energy);">--</div>
+          <div class="wstat-unit">kWh</div>
+        </div>
+        <div class="wstat" id="estat-excess" style="--water:var(--energy);">
+          <div class="wstat-label">Excess Load</div>
+          <div class="wstat-val danger" id="es-excess">--</div>
+          <div class="wstat-unit">+kWh</div>
+        </div>
+        <div class="wstat" id="estat-saved" style="--water:var(--energy);">
+          <div class="wstat-label">Power Diverted</div>
+          <div class="wstat-val" id="es-saved" style="color:var(--energy);">0</div>
+          <div class="wstat-unit">kWh</div>
+        </div>
+      </div>
+
+      <!-- Grid map -->
+      <div class="pipe-map-wrap">
+        <div class="pipe-map-title">GRID NETWORK SIMULATION — REAL-TIME</div>
+        <canvas id="grid-canvas"></canvas>
+        <div class="shutoff-overlay" id="isolate-overlay">
+          <div class="shutoff-stamp" style="color:#ffd60a;border-color:#ffd60a;text-shadow:0 0 40px rgba(255,214,10,0.5);">SECTOR ISOLATED</div>
+        </div>
+      </div>
     </div>
 
     <!-- Water Map View -->
@@ -764,6 +844,12 @@ let savedInterval = null;
 let pipeAnim = null;
 let activeAlertData = null;
 
+// Energy JS State
+let isGridIsolated = false;
+let divertedEnergy = 0;
+let energyInterval = null;
+let gridAnim = null;
+
 // ─────────────────────────────────────────────
 //  RENDER ALERTS (called once, stable)
 // ─────────────────────────────────────────────
@@ -773,7 +859,8 @@ function renderAlerts() {
     currentFilter === 'all' ||
     (currentFilter === 'critical' && a.severity === 'critical') ||
     (currentFilter === 'warning'  && a.severity === 'warning')  ||
-    (currentFilter === 'water'    && a.type === 'water')
+    (currentFilter === 'water'    && a.type === 'water')        ||
+    (currentFilter === 'energy'   && a.type === 'energy')
   );
 
   // Animate out old cards, animate in new
@@ -804,28 +891,34 @@ function renderAlerts() {
   });
 
   // Update stats (smooth, no blink)
-  const total  = ALERT_SEED.length;
-  const crits  = ALERT_SEED.filter(a => a.severity === 'critical').length;
-  const warns  = ALERT_SEED.filter(a => a.severity === 'warning').length;
-  const waters = ALERT_SEED.filter(a => a.type === 'water').length;
+  const total   = ALERT_SEED.length;
+  const crits   = ALERT_SEED.filter(a => a.severity === 'critical').length;
+  const warns   = ALERT_SEED.filter(a => a.severity === 'warning').length;
+  const waters  = ALERT_SEED.filter(a => a.type === 'water').length;
+  const energies= ALERT_SEED.filter(a => a.type === 'energy').length;
 
-  smoothCount('stat-total', total);
-  smoothCount('stat-crit',  crits);
-  smoothCount('stat-warn',  warns);
-  smoothCount('stat-water', waters);
+  smoothCount('stat-total',  total);
+  smoothCount('stat-crit',   crits);
+  smoothCount('stat-warn',   warns);
+  smoothCount('stat-water',  waters);
+  smoothCount('stat-energy', energies);
 }
 
 // Build a single alert card DOM element
 function buildCard(a, delay) {
   const isWater = a.type === 'water';
+  const isEnergy = a.type === 'energy';
   const div = document.createElement('div');
-  div.className = `alert-card ${a.severity} ${isWater ? 'water-alert' : ''}`;
+  div.className = `alert-card ${a.severity} ${isWater ? 'water-alert' : (isEnergy ? 'energy-alert' : '')}`;
   div.dataset.id = a.id;
   div.style.animationDelay = `${delay * 60}ms`;
   div.onclick = () => selectAlert(a);
 
-  const badgeClass = isWater ? 'water' : a.severity;
-  const badgeLabel = isWater ? '💧 WATER' : a.severity.toUpperCase();
+  let badgeClass = a.severity;
+  let badgeLabel = a.severity.toUpperCase();
+  if (isWater) { badgeClass = 'water'; badgeLabel = '💧 WATER'; }
+  else if (isEnergy) { badgeClass = 'energy'; badgeLabel = '⚡ ENERGY'; }
+
   const metricLabel = formatMetric(a.metric, a.value);
 
   div.innerHTML = `
@@ -839,6 +932,7 @@ function buildCard(a, delay) {
       <div class="alert-metric">${metricLabel}</div>
     </div>
     ${isWater ? '<div class="water-hint">Click to open Water Network Map</div>' : ''}
+    ${isEnergy ? '<div class="energy-hint">Click to open Energy Grid Map</div>' : ''}
   `;
   return div;
 }
@@ -877,24 +971,29 @@ function smoothCount(id, target) {
 //  SELECT ALERT
 // ─────────────────────────────────────────────
 function selectAlert(alert) {
-  // Deselect previous
   document.querySelectorAll('.alert-card').forEach(c => c.classList.remove('active'));
-  // Select new
   const card = document.querySelector(`[data-id="${alert.id}"]`);
   if (card) card.classList.add('active');
   activeAlertId = alert.id;
 
+  document.getElementById('water-view').classList.remove('visible');
+  if (document.getElementById('energy-view')) {
+      document.getElementById('energy-view').classList.remove('visible');
+  }
+  stopPipeAnim();
+  if (typeof stopGridAnim === "function") stopGridAnim();
+
   if (alert.type === 'water') {
     openWaterView(alert);
+  } else if (alert.type === 'energy') {
+    openEnergyView(alert);
   } else {
     document.getElementById('empty-state').classList.remove('hidden');
     document.getElementById('empty-state').querySelector('.empty-text').innerHTML =
       `<strong style="color:var(--cyan)">${ZONES.find(z=>z.id===alert.zone)?.name}</strong><br>
       Alert type: <em>${alert.metric.replace(/_/g,' ')}</em><br>
       Value: <strong>${formatMetric(alert.metric, alert.value)}</strong><br><br>
-      <span style="color:var(--muted);font-size:11px">Water alerts support direct shutoff control.<br>Select a 💧 water alert to take action.</span>`;
-    document.getElementById('water-view').classList.remove('visible');
-    stopPipeAnim();
+      <span style="color:var(--muted);font-size:11px">Water and Energy alerts support direct network isolation.<br>Select a 💧 water or ⚡ energy alert to take action.</span>`;
   }
 }
 
@@ -1299,6 +1398,304 @@ function showToast(type, msg) {
 }
 
 // ─────────────────────────────────────────────
+//  ENERGY VIEW & GRID SIMULATION
+// ─────────────────────────────────────────────
+function openEnergyView(alert) {
+  activeAlertData = alert;
+  isGridIsolated = false;
+  divertedEnergy = 0;
+
+  document.getElementById('empty-state').classList.add('hidden');
+  const view = document.getElementById('energy-view');
+  view.classList.add('visible');
+
+  const zone = ZONES.find(z => z.id === alert.zone);
+  document.getElementById('energy-zone-name').textContent =
+    `${zone?.name} (${alert.zone}) · ${zone?.type?.toUpperCase()}`;
+
+  const excess = alert.value - alert.normal;
+  document.getElementById('es-load').textContent   = alert.value.toLocaleString();
+  document.getElementById('es-normal').textContent = alert.normal.toLocaleString();
+  document.getElementById('es-excess').textContent = `+${excess.toLocaleString()}`;
+  document.getElementById('es-saved').textContent  = '0';
+
+  document.getElementById('es-load').className   = 'wstat-val danger';
+  document.getElementById('es-excess').className = 'wstat-val danger';
+
+  setEnergyStatusActive();
+
+  document.getElementById('isolate-btn').style.display = '';
+  document.getElementById('isolate-btn').disabled = false;
+  document.getElementById('restore-power-btn').style.display = 'none';
+  document.getElementById('isolate-overlay').classList.remove('visible');
+
+  stopGridAnim();
+  setTimeout(() => startGridAnim(alert, false), 50);
+
+  if (energyInterval) clearInterval(energyInterval);
+}
+
+function setEnergyStatusActive() {
+  const bar = document.getElementById('energy-status-bar');
+  bar.style.backgroundColor = 'rgba(255,59,59,0.08)';
+  bar.style.borderColor = 'var(--red)';
+  bar.style.color = 'var(--red)';
+  document.getElementById('energy-status-text').textContent =
+    'OVERLOAD DETECTED — Transformer stress critical. Immediate isolation recommended.';
+  document.getElementById('energy-status-saved').textContent = '';
+}
+
+function setEnergyStatusIsolated() {
+  const bar = document.getElementById('energy-status-bar');
+  bar.style.backgroundColor = 'rgba(255, 214, 10, 0.08)';
+  bar.style.borderColor = 'var(--energy)';
+  bar.style.color = 'var(--energy)';
+  document.getElementById('energy-status-text').textContent =
+    'SECTOR ISOLATED — Faulty grid segmented. General power nominal. Dispatch crew.';
+}
+
+function closeEnergyView() {
+  document.getElementById('energy-view').classList.remove('visible');
+  document.getElementById('empty-state').classList.remove('hidden');
+  document.getElementById('empty-state').querySelector('.empty-text').innerHTML =
+    'Select an alert to view details.<br>Click any <strong style="color:var(--water)">💧 Water</strong> or <strong style="color:var(--energy)">⚡ Energy</strong> alert to open the simulation and take direct action.';
+  document.querySelectorAll('.alert-card').forEach(c => c.classList.remove('active'));
+  stopGridAnim();
+  if (energyInterval) clearInterval(energyInterval);
+}
+
+function executeIsolation() {
+  if (isGridIsolated || !activeAlertData) return;
+  isGridIsolated = true;
+
+  const btn = document.getElementById('isolate-btn');
+  btn.disabled = true;
+  btn.textContent = '⏳ Isolating Grid...';
+
+  setTimeout(() => {
+    btn.style.display = 'none';
+    document.getElementById('restore-power-btn').style.display = '';
+    document.getElementById('isolate-overlay').classList.add('visible');
+
+    setEnergyStatusIsolated();
+
+    document.getElementById('es-load').textContent = activeAlertData.normal.toLocaleString();
+    document.getElementById('es-load').className = 'wstat-val safe';
+    document.getElementById('es-excess').textContent = '0';
+    document.getElementById('es-excess').className = 'wstat-val safe';
+
+    const ratePerSecond = Math.round(activeAlertData.value / 3600);
+    energyInterval = setInterval(() => {
+      divertedEnergy += ratePerSecond;
+      document.getElementById('es-saved').textContent = divertedEnergy.toLocaleString();
+      document.getElementById('energy-status-saved').textContent = `⚡ ${divertedEnergy.toLocaleString()} kWh diverted`;
+    }, 1000);
+
+    stopGridAnim();
+    setTimeout(() => startGridAnim(activeAlertData, true), 50);
+
+    const zoneObj = ZONES.find(z => z.id === activeAlertData.zone);
+    const zName = zoneObj ? zoneObj.name : 'site';
+    showToast('success', `⚡ Grid sector isolated in ${zName}! Power rerouted successfully.`);
+  }, 1200);
+}
+
+function restorePower() {
+  if (!isGridIsolated) return;
+  isGridIsolated = false;
+  if (energyInterval) clearInterval(energyInterval);
+
+  document.getElementById('isolate-overlay').classList.remove('visible');
+  document.getElementById('restore-power-btn').style.display = 'none';
+  document.getElementById('isolate-btn').style.display = '';
+  document.getElementById('isolate-btn').disabled = false;
+  document.getElementById('isolate-btn').textContent = '🔌 ISOLATE GRID';
+
+  document.getElementById('es-load').textContent = activeAlertData.value.toLocaleString();
+  document.getElementById('es-load').className = 'wstat-val danger';
+  document.getElementById('es-excess').textContent = `+${(activeAlertData.value - activeAlertData.normal).toLocaleString()}`;
+  document.getElementById('es-excess').className = 'wstat-val danger';
+
+  setEnergyStatusActive();
+
+  stopGridAnim();
+  setTimeout(() => startGridAnim(activeAlertData, false), 50);
+
+  showToast('info', '💡 Power restored. Transformer loads returning to threshold.');
+}
+
+function stopGridAnim() {
+  if (gridAnim) { cancelAnimationFrame(gridAnim); gridAnim = null; }
+}
+
+function startGridAnim(alert, shutoff) {
+  const canvas = document.getElementById('grid-canvas');
+  if (!canvas) return;
+  const wrap = canvas.parentElement;
+  canvas.width  = wrap.clientWidth;
+  canvas.height = wrap.clientHeight;
+  const W = canvas.width, H = canvas.height;
+  const ctx = canvas.getContext('2d');
+
+  const zoneObj = ZONES.find(z => z.id === alert.zone);
+  const zName = zoneObj ? zoneObj.name : 'Unknown';
+  const prefix = zName.split(' ')[0];
+
+  const nodes = [
+    { x: 0.12, y: 0.15, label: 'Main Substation' },
+    { x: 0.35, y: 0.15, label: `${prefix} Hub` },
+    { x: 0.60, y: 0.15, label: `${prefix} Tx 1` },
+    { x: 0.85, y: 0.15, label: `${prefix} Tx 2` },
+    { x: 0.12, y: 0.50, label: 'Sector A' },
+    { x: 0.35, y: 0.50, label: 'Sector B' },
+    { x: 0.60, y: 0.50, label: '⚡ OVERLOAD', isLeak: true },
+    { x: 0.85, y: 0.50, label: 'Sector D' },
+    { x: 0.12, y: 0.82, label: 'Block 1' },
+    { x: 0.35, y: 0.82, label: 'Block 2' },
+    { x: 0.60, y: 0.82, label: 'Block 3' },
+    { x: 0.85, y: 0.82, label: 'Block 4' },
+  ];
+
+  const pipes = [
+    [0,1],[1,2],[2,3],[0,4],[1,5],[2,6],[3,7],
+    [4,5],[5,6],[6,7],[4,8],[5,9],[6,10],[7,11],
+    [8,9],[9,10],[10,11],
+  ];
+
+  const activePipes = pipes.filter(([ai, bi]) => 
+    !(shutoff && (ai === 6 || bi === 6))
+  );
+
+  const particles = [];
+  function spawnParticles() {
+    for (let i = 0; i < 70; i++) {
+      const pipe = activePipes[Math.floor(Math.random() * activePipes.length)];
+      particles.push({
+        pipe,
+        t: Math.random(),
+        speed: 0.008 + Math.random() * 0.015,
+        size: 1.5 + Math.random() * 2,
+        alpha: 0.6 + Math.random() * 0.4,
+      });
+    }
+  }
+  spawnParticles();
+
+  let frame = 0;
+  function draw() {
+    ctx.clearRect(0, 0, W, H);
+    frame++;
+
+    ctx.fillStyle = 'rgba(28,45,66,0.3)';
+    for (let gx = 30; gx < W; gx += 30) {
+      for (let gy = 30; gy < H; gy += 30) {
+        ctx.beginPath();
+        ctx.arc(gx, gy, 1, 0, Math.PI*2);
+        ctx.fill();
+      }
+    }
+
+    pipes.forEach(([ai, bi]) => {
+      const a = nodes[ai], b = nodes[bi];
+      const isConnectedToLeak = (ai === 6 || bi === 6);
+      const isActiveLeak = isConnectedToLeak && !shutoff;
+      const isIsolated = isConnectedToLeak && shutoff;
+
+      ctx.beginPath();
+      ctx.moveTo(a.x*W, a.y*H);
+      ctx.lineTo(b.x*W, b.y*H);
+      ctx.lineWidth = 3;
+      ctx.strokeStyle = isActiveLeak
+        ? `rgba(255,59,59,0.35)`
+        : isIsolated
+          ? `rgba(255,214,10,0.18)`
+          : `rgba(0,229,255,0.22)`;
+      ctx.stroke();
+    });
+
+    for (let i = particles.length - 1; i >= 0; i--) {
+      const p = particles[i];
+      p.t += p.speed;
+      if (p.t > 1) {
+        p.pipe = activePipes[Math.floor(Math.random() * activePipes.length)];
+        p.t = 0;
+        p.speed = 0.008 + Math.random() * 0.015;
+      }
+      const [ai, bi] = p.pipe;
+      const a = nodes[ai], b = nodes[bi];
+      const px = a.x*W + (b.x*W - a.x*W) * p.t;
+      const py = a.y*H + (b.y*H - a.y*H) * p.t;
+      const isLeakPath = (p.pipe[0] === 6 || p.pipe[1] === 6);
+
+      ctx.beginPath();
+      ctx.arc(px, py, p.size, 0, Math.PI*2);
+      ctx.fillStyle = isLeakPath
+        ? `rgba(255,59,59,${p.alpha})`
+        : `rgba(255,214,10,${p.alpha})`; 
+      ctx.fill();
+    }
+
+    nodes.forEach((n, i) => {
+      const x = n.x*W, y = n.y*H;
+      const isLeakNode = (i === 6);
+      const isActiveLeak = isLeakNode && !shutoff;
+      const isIsolated = isLeakNode && shutoff;
+      const r = i === 0 ? 10 : 7;
+
+      if (isActiveLeak) {
+        const pulse = 0.5 + 0.5 * Math.sin(frame * 0.15);
+        ctx.beginPath();
+        ctx.arc(x, y, r + 10 + pulse*8, 0, Math.PI*2);
+        ctx.fillStyle = `rgba(255,59,59,${0.1 * pulse})`;
+        ctx.fill();
+      }
+
+      ctx.beginPath();
+      if (i === 0 || i === 6) {
+        // Draw squares for transformers
+        ctx.rect(x - r, y - r, r*2, r*2);
+      } else {
+        ctx.arc(x, y, r, 0, Math.PI*2);
+      }
+      
+      ctx.fillStyle = isActiveLeak
+        ? `rgba(255,59,59,0.9)`
+        : isIsolated
+          ? `rgba(255,214,10,0.7)`
+          : i === 0
+            ? `rgba(255,214,10,0.9)`
+            : `rgba(0,229,255,0.7)`;
+      ctx.fill();
+      ctx.strokeStyle = isActiveLeak ? '#ff3b3b' : isIsolated ? '#ffd60a' : '#00e5ff';
+      ctx.lineWidth = 1.5;
+      ctx.stroke();
+
+      ctx.fillStyle = isActiveLeak ? '#ff8888' : '#4a6480';
+      if (isIsolated) ctx.fillStyle = '#ffd60a';
+      ctx.font = `${(isActiveLeak || isIsolated) ? 'bold ' : ''}10px IBM Plex Mono`;
+      
+      let labelText = n.label;
+      if (isIsolated) labelText = '✔ SECURE';
+      
+      ctx.textAlign = 'center';
+      ctx.fillText(labelText, x, y - r - 6);
+
+      if (i === 0) {
+        const normalFlow = alert.normal;
+        const currentFlow = shutoff ? normalFlow : alert.value;
+        ctx.fillStyle = '#ffd60a';
+        ctx.font = 'bold 11px IBM Plex Mono';
+        ctx.fillText(`${currentFlow.toLocaleString()} kWh`, x, y + r + 15);
+      }
+    });
+
+    gridAnim = requestAnimationFrame(draw);
+  }
+
+  gridAnim = requestAnimationFrame(draw);
+}
+
+// ─────────────────────────────────────────────
 //  INIT
 // ─────────────────────────────────────────────
 renderAlerts();
@@ -1308,6 +1705,10 @@ window.addEventListener('resize', () => {
   if (activeAlertData && document.getElementById('water-view').classList.contains('visible')) {
     stopPipeAnim();
     setTimeout(() => startPipeAnim(activeAlertData, isShutoff), 50);
+  }
+  if (activeAlertData && document.getElementById('energy-view').classList.contains('visible')) {
+    stopGridAnim();
+    setTimeout(() => startGridAnim(activeAlertData, isGridIsolated), 50);
   }
 });
 </script>
