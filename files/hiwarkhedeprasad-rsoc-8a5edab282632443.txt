@@ -1,0 +1,1460 @@
+Directory structure:
+└── hiwarkhedeprasad-rsoc/
+    ├── README.md
+    ├── files.zip
+    └── files/
+        ├── backend/
+        │   ├── generate_data.py
+        │   ├── main.py
+        │   └── requirements.txt
+        └── frontend/
+            ├── app.js
+            ├── index.html
+            ├── package.json
+            └── styles.css
+
+================================================
+FILE: README.md
+================================================
+"# RSOC" 
+
+
+
+================================================
+FILE: files.zip
+================================================
+[Binary file]
+
+
+================================================
+FILE: files/backend/generate_data.py
+================================================
+"""
+NexaCity — Synthetic City Dataset Generator
+Run: python generate_data.py
+Outputs: city_data.csv (7 days of hourly data, 8 zones)
+"""
+import pandas as pd
+import numpy as np
+from datetime import datetime, timedelta
+
+np.random.seed(42)
+
+ZONES = {
+    "Z1": {"name": " Sitabuldi", "lat": 21.1444, "lon": 79.0832, "type": "commercial"},
+    "Z2": {"name": "Gandhibagh",  "lat": 21.1528, "lon": 79.1026, "type": "industrial"},
+    "Z3": {"name": "Dharampeth",  "lat": 21.1399, "lon": 79.0607, "type": "residential"},
+    "Z4": {"name": "Sadar",       "lat": 21.1610, "lon": 79.0760, "type": "commercial"},
+    "Z5": {"name": "MIDC Hingna",     "lat": 21.0963, "lon": 78.9839, "type": "industrial"},
+    "Z6": {"name": "Kamptee Road",    "lat": 21.2000, "lon": 79.1200, "type": "commercial"},
+    "Z7": {"name": "Manish Nagar",    "lat": 21.0931, "lon": 79.0617, "type": "residential"},
+    "Z8": {"name": "Wathoda",         "lat": 21.1458, "lon": 79.1350, "type": "industrial"},
+}
+
+records = []
+start = datetime.now() - timedelta(days=7)
+
+for day in range(7):
+    for hour in range(24):
+        ts = start + timedelta(days=day, hours=hour)
+        is_weekday = ts.weekday() < 5
+        is_peak = hour in [8, 9, 17, 18, 19]
+        is_night = hour < 6 or hour > 22
+
+        for zone_id, zone in ZONES.items():
+            # Traffic (0-100 congestion index)
+            base_traffic = 70 if (is_peak and is_weekday and zone["type"] in ["commercial","mixed"]) else 20
+            if zone["type"] == "industrial":
+                base_traffic = 60 if (7 <= hour <= 18 and is_weekday) else 15
+            if is_night:
+                base_traffic = 5
+            traffic = np.clip(base_traffic + np.random.normal(0, 8), 0, 100)
+
+            # AQI (50-300) — correlated with traffic + industrial
+            aqi_base = 80 + traffic * 0.8
+            if zone["type"] == "industrial":
+                aqi_base += 60
+            if zone["type"] == "residential" or zone["type"] == "educational":
+                aqi_base -= 20
+            aqi = np.clip(aqi_base + np.random.normal(0, 12), 40, 300)
+
+            # Energy kWh (zone consumption)
+            energy_base = 500 if zone["type"] == "commercial" else 300
+            if is_peak and is_weekday:
+                energy_base *= 1.6
+            if is_night:
+                energy_base *= 0.3
+            if zone["type"] == "industrial":
+                energy_base = 900 if is_weekday else 400
+            energy = np.clip(energy_base + np.random.normal(0, 40), 50, 2000)
+
+            # Water L/hr
+            water_base = 1200 if zone["type"] == "residential" else 800
+            if 6 <= hour <= 9 or 18 <= hour <= 21:
+                water_base *= 1.5
+            if is_night:
+                water_base *= 0.2
+            water = np.clip(water_base + np.random.normal(0, 80), 50, 4000)
+
+            # Transport ridership
+            transport_base = 800 if (is_peak and is_weekday) else 150
+            if zone["type"] in ["commercial","educational"]:
+                transport_base *= 1.4
+            if is_night:
+                transport_base = 20
+            transport = np.clip(transport_base + np.random.normal(0, 60), 0, 3000)
+
+            # Inject anomalies for demo interest
+            if zone_id == "Z2" and day == 5 and 14 <= hour <= 16:
+                aqi += 120  # Industrial pollution spike
+                traffic += 30
+            if zone_id == "Z7" and day == 3 and hour == 3:
+                water *= 4.5  # Pipe leak anomaly at 3am
+            if zone_id == "Z1" and day == 6 and 17 <= hour <= 19:
+                energy *= 2.2  # Energy overload during event
+
+            records.append({
+                "timestamp": ts.isoformat(),
+                "hour": hour,
+                "day_of_week": ts.strftime("%A"),
+                "zone_id": zone_id,
+                "zone_name": zone["name"],
+                "zone_type": zone["type"],
+                "lat": zone["lat"],
+                "lon": zone["lon"],
+                "traffic_index": round(traffic, 1),
+                "aqi": round(aqi, 1),
+                "energy_kwh": round(energy, 1),
+                "water_liters": round(water, 1),
+                "transport_ridership": int(transport),
+            })
+
+df = pd.DataFrame(records)
+df.to_csv("city_data.csv", index=False)
+print(f"✅ Generated {len(df)} records across {len(ZONES)} zones × 7 days × 24 hours")
+print(df.head())
+
+
+
+================================================
+FILE: files/backend/main.py
+================================================
+"""
+NexaCity Backend — FastAPI
+Run: uvicorn main:app --reload --port 8000
+"""
+from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
+import pandas as pd
+import numpy as np
+from sklearn.ensemble import IsolationForest
+from sklearn.preprocessing import StandardScaler
+import json
+from datetime import datetime, timedelta
+import os
+
+app = FastAPI(title="NexaCity API")
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+# ── Load & preprocess data ──────────────────────────────────────────────────
+DATA_PATH = os.path.join(os.path.dirname(__file__), "../data/city_data.csv")
+df = pd.read_csv(DATA_PATH, parse_dates=["timestamp"])
+
+METRICS = ["traffic_index", "aqi", "energy_kwh", "water_liters", "transport_ridership"]
+ZONES = df[["zone_id","zone_name","zone_type","lat","lon"]].drop_duplicates().to_dict("records")
+
+# ── Anomaly Detection (Isolation Forest per zone) ──────────────────────────
+anomaly_results = {}
+for zone_id, zone_df in df.groupby("zone_id"):
+    features = zone_df[METRICS].fillna(0)
+    scaler = StandardScaler()
+    scaled = scaler.fit_transform(features)
+    model = IsolationForest(contamination=0.05, random_state=42)
+    preds = model.fit_predict(scaled)
+    scores = model.score_samples(scaled)
+    zone_df = zone_df.copy()
+    zone_df["anomaly"] = (preds == -1)
+    zone_df["anomaly_score"] = -scores  # higher = more anomalous
+    anomaly_results[zone_id] = zone_df
+
+anomaly_df = pd.concat(anomaly_results.values())
+
+# ── Simple Forecast (rolling trend extrapolation) ──────────────────────────
+def forecast_metric(zone_id: str, metric: str, hours: int = 24):
+    zdf = df[df["zone_id"] == zone_id].sort_values("timestamp")
+    last_48 = zdf.tail(48)[metric].values
+    # Compute hourly pattern from historical data
+    hourly_avg = zdf.groupby("hour")[metric].mean()
+    now_hour = datetime.now().hour
+    forecast = []
+    for i in range(hours):
+        h = (now_hour + i) % 24
+        base = hourly_avg.get(h, last_48.mean())
+        noise = np.random.normal(0, base * 0.03)
+        forecast.append(round(float(base + noise), 1))
+    return forecast
+
+# ── Cross-Domain Correlation ────────────────────────────────────────────────
+def compute_correlations():
+    results = []
+    for zone_id, zdf in df.groupby("zone_id"):
+        corr = zdf[METRICS].corr()
+        pairs = [
+            {"metric_a": "traffic_index", "metric_b": "aqi",
+             "correlation": round(float(corr.loc["traffic_index","aqi"]), 3)},
+            {"metric_a": "traffic_index", "metric_b": "energy_kwh",
+             "correlation": round(float(corr.loc["traffic_index","energy_kwh"]), 3)},
+            {"metric_a": "aqi", "metric_b": "transport_ridership",
+             "correlation": round(float(corr.loc["aqi","transport_ridership"]), 3)},
+        ]
+        results.append({"zone_id": zone_id, "correlations": pairs})
+    return results
+
+correlations = compute_correlations()
+
+# ── Zone Health Score (0-100, higher = healthier) ──────────────────────────
+def compute_zone_health():
+    latest = df.sort_values("timestamp").groupby("zone_id").last().reset_index()
+    scores = []
+    for _, row in latest.iterrows():
+        # Normalize each metric (lower traffic/aqi/energy = better; higher transport = better)
+        traffic_score = max(0, 100 - row["traffic_index"])
+        aqi_score = max(0, 100 - (row["aqi"] - 50) / 2.5)
+        energy_score = max(0, 100 - row["energy_kwh"] / 20)
+        transport_score = min(100, row["transport_ridership"] / 10)
+        health = round((traffic_score * 0.3 + aqi_score * 0.35 + energy_score * 0.2 + transport_score * 0.15), 1)
+        health = np.clip(health, 0, 100)
+
+        # Check for active anomalies
+        zone_anomalies = anomaly_df[(anomaly_df["zone_id"] == row["zone_id"]) &
+                                     (anomaly_df["anomaly"] == True)]
+        recent_anomalies = zone_anomalies.tail(3)
+        has_alert = len(recent_anomalies) > 0
+
+        scores.append({
+            "zone_id": row["zone_id"],
+            "zone_name": row["zone_name"],
+            "zone_type": row["zone_type"],
+            "lat": row["lat"],
+            "lon": row["lon"],
+            "health_score": float(health),
+            "status": "critical" if health < 40 else "warning" if health < 65 else "good",
+            "has_alert": bool(has_alert),
+            "latest": {
+                "traffic_index": round(float(row["traffic_index"]), 1),
+                "aqi": round(float(row["aqi"]), 1),
+                "energy_kwh": round(float(row["energy_kwh"]), 1),
+                "water_liters": round(float(row["water_liters"]), 1),
+                "transport_ridership": int(row["transport_ridership"]),
+            }
+        })
+    return scores
+
+# ── ROUTES ──────────────────────────────────────────────────────────────────
+
+@app.get("/")
+def root():
+    return {"status": "NexaCity API running", "zones": len(ZONES), "records": len(df)}
+
+@app.get("/api/zones")
+def get_zones():
+    return compute_zone_health()
+
+@app.get("/api/zones/{zone_id}/timeseries")
+def get_timeseries(zone_id: str, metric: str = "aqi", hours: int = 48):
+    zdf = df[df["zone_id"] == zone_id].sort_values("timestamp").tail(hours)
+    return {
+        "zone_id": zone_id,
+        "metric": metric,
+        "data": [
+            {"timestamp": row["timestamp"].isoformat(), "value": round(float(row[metric]), 1)}
+            for _, row in zdf.iterrows()
+        ]
+    }
+
+@app.get("/api/zones/{zone_id}/forecast")
+def get_forecast(zone_id: str, metric: str = "aqi", hours: int = 24):
+    values = forecast_metric(zone_id, metric, hours)
+    now = datetime.now()
+    return {
+        "zone_id": zone_id,
+        "metric": metric,
+        "forecast": [
+            {"hour": i+1, "timestamp": (now + timedelta(hours=i+1)).strftime("%H:00"), "value": v}
+            for i, v in enumerate(values)
+        ]
+    }
+
+@app.get("/api/anomalies")
+def get_anomalies():
+    alerts = anomaly_df[anomaly_df["anomaly"] == True].sort_values("anomaly_score", ascending=False)
+    recent = alerts.tail(20)
+    result = []
+    for _, row in recent.iterrows():
+        # Determine which metric is most anomalous
+        metric_vals = {m: row[m] for m in METRICS}
+        top_metric = max(metric_vals, key=lambda m: abs(metric_vals[m]))
+        result.append({
+            "zone_id": row["zone_id"],
+            "zone_name": row["zone_name"],
+            "timestamp": row["timestamp"].isoformat(),
+            "anomaly_score": round(float(row["anomaly_score"]), 3),
+            "top_metric": top_metric,
+            "value": round(float(row[top_metric]), 1),
+            "metrics": {m: round(float(row[m]), 1) for m in METRICS}
+        })
+    return result
+
+@app.get("/api/correlations")
+def get_correlations():
+    return correlations
+
+@app.get("/api/summary")
+def get_summary():
+    zone_health = compute_zone_health()
+    critical = [z for z in zone_health if z["status"] == "critical"]
+    warnings = [z for z in zone_health if z["status"] == "warning"]
+    anomaly_count = int(anomaly_df["anomaly"].sum())
+    return {
+        "total_zones": len(zone_health),
+        "critical_zones": len(critical),
+        "warning_zones": len(warnings),
+        "total_anomalies_detected": anomaly_count,
+        "avg_city_health": round(float(np.mean([z["health_score"] for z in zone_health])), 1),
+        "critical_zone_names": [z["zone_name"] for z in critical],
+    }
+
+@app.post("/api/query")
+async def nlp_query(body: dict):
+    question = body.get("question", "").lower()
+    zone_health = compute_zone_health()
+    anomalies = get_anomalies()
+
+    # Rule-based NLP for demo reliability (no external API needed)
+    if any(w in question for w in ["worst", "critical", "bad", "alert", "danger"]):
+        critical = [z for z in zone_health if z["status"] == "critical"]
+        if not critical:
+            critical = sorted(zone_health, key=lambda z: z["health_score"])[:2]
+        names = ", ".join([z["zone_name"] for z in critical])
+        return {"answer": f"⚠️ Critical zones right now: **{names}**. These zones have health scores below 40 and require immediate attention.",
+                "zones": [z["zone_id"] for z in critical], "type": "alert"}
+
+    if any(w in question for w in ["air", "aqi", "pollution", "quality"]):
+        worst_aqi = max(zone_health, key=lambda z: z["latest"]["aqi"])
+        return {"answer": f"🌫️ Worst air quality is in **{worst_aqi['zone_name']}** with AQI {worst_aqi['latest']['aqi']}. "
+                          f"{'This is hazardous — avoid outdoor activity.' if worst_aqi['latest']['aqi'] > 150 else 'Moderate levels — sensitive groups should take care.'}",
+                "zones": [worst_aqi["zone_id"]], "type": "aqi"}
+
+    if any(w in question for w in ["traffic", "congestion", "road", "jam"]):
+        worst_traffic = max(zone_health, key=lambda z: z["latest"]["traffic_index"])
+        return {"answer": f"🚗 Highest congestion: **{worst_traffic['zone_name']}** (index: {worst_traffic['latest']['traffic_index']:.0f}/100). "
+                          f"Consider rerouting public transport through Z6 corridor.",
+                "zones": [worst_traffic["zone_id"]], "type": "traffic"}
+
+    if any(w in question for w in ["energy", "power", "electricity", "overload"]):
+        worst_energy = max(zone_health, key=lambda z: z["latest"]["energy_kwh"])
+        return {"answer": f"⚡ Peak energy consumption: **{worst_energy['zone_name']}** at {worst_energy['latest']['energy_kwh']:.0f} kWh. "
+                          f"Recommend load balancing — shift non-critical loads to off-peak hours.",
+                "zones": [worst_energy["zone_id"]], "type": "energy"}
+
+    if any(w in question for w in ["water", "leak", "consumption"]):
+        worst_water = max(zone_health, key=lambda z: z["latest"]["water_liters"])
+        return {"answer": f"💧 Highest water consumption: **{worst_water['zone_name']}** at {worst_water['latest']['water_liters']:.0f} L/hr. "
+                          f"{'⚠️ Anomaly detected — possible pipe leak. Dispatch inspection team.' if worst_water['zone_id'] == 'Z7' else 'Within expected range for zone type.'}",
+                "zones": [worst_water["zone_id"]], "type": "water"}
+
+    if any(w in question for w in ["anomal", "unusual", "spike", "strange"]):
+        if anomalies:
+            a = anomalies[0]
+            return {"answer": f"🔍 Most significant anomaly: **{a['zone_name']}** — unusual {a['top_metric'].replace('_',' ')} detected (value: {a['value']}). "
+                              f"Anomaly score: {a['anomaly_score']:.2f}. This occurred at {a['timestamp'][:16]}.",
+                    "zones": [a["zone_id"]], "type": "anomaly"}
+
+    if any(w in question for w in ["health", "overall", "summary", "status", "how is"]):
+        summary = get_summary()
+        return {"answer": f"🏙️ City Health Overview: Average score **{summary['avg_city_health']}/100**. "
+                          f"{summary['critical_zones']} critical zones, {summary['warning_zones']} on watch. "
+                          f"{summary['total_anomalies_detected']} anomalies detected in last 7 days.",
+                "zones": [], "type": "summary"}
+
+    return {"answer": "I can answer questions about: air quality, traffic, energy, water, anomalies, or overall city health. Try: 'Which zones have the worst AQI?' or 'Where is energy overloading?'",
+            "zones": [], "type": "help"}
+
+if __name__ == "__main__":
+    import uvicorn
+    uvicorn.run(app, host="0.0.0.0", port=8000)
+
+
+
+================================================
+FILE: files/backend/requirements.txt
+================================================
+fastapi==0.111.0
+uvicorn[standard]==0.29.0
+pandas==2.2.2
+numpy==1.26.4
+scikit-learn==1.4.2
+python-multipart==0.0.9
+
+
+================================================
+FILE: files/frontend/app.js
+================================================
+// ══════════════════════════════════════════════════════════
+// NAGPUR ZONES — Real localities
+// ══════════════════════════════════════════════════════════
+const NAGPUR_ZONES = [
+  { id:'Z1', name:'Sitabuldi',      area:'Central',     type:'commercial',  lat:21.1444, lon:79.0832, baseAqi:95,  baseTraffic:75, baseEnergy:620, baseWater:900,  h:5 },
+  { id:'Z2', name:'Gandhibagh',     area:'Core City',   type:'mixed',       lat:21.1528, lon:79.1026, baseAqi:105, baseTraffic:80, baseEnergy:480, baseWater:1100, h:4 },
+  { id:'Z3', name:'Dharampeth',     area:'West',        type:'residential', lat:21.1399, lon:79.0607, baseAqi:65,  baseTraffic:40, baseEnergy:320, baseWater:1400, h:3 },
+  { id:'Z4', name:'Sadar',          area:'Cantonment',  type:'mixed',       lat:21.1610, lon:79.0760, baseAqi:75,  baseTraffic:55, baseEnergy:390, baseWater:800,  h:4 },
+  { id:'Z5', name:'MIDC Hingna',    area:'Industrial W',type:'industrial',  lat:21.0963, lon:78.9839, baseAqi:185, baseTraffic:60, baseEnergy:1800,baseWater:700,  h:6 },
+  { id:'Z6', name:'Kamptee Road',   area:'North',       type:'commercial',  lat:21.2000, lon:79.1200, baseAqi:120, baseTraffic:70, baseEnergy:510, baseWater:950,  h:3 },
+  { id:'Z7', name:'Manish Nagar',   area:'South-West',  type:'residential', lat:21.0931, lon:79.0617, baseAqi:58,  baseTraffic:30, baseEnergy:280, baseWater:1200, h:2 },
+  { id:'Z8', name:'Wathoda',        area:'East Indl',   type:'industrial',  lat:21.1458, lon:79.1350, baseAqi:175, baseTraffic:55, baseEnergy:1600,baseWater:600,  h:5 },
+  { id:'Z9', name:'Seminary Hills', area:'North-West',  type:'educational', lat:21.1691, lon:79.0494, baseAqi:48,  baseTraffic:25, baseEnergy:260, baseWater:1050, h:3 },
+  { id:'Z10',name:'Itwari',         area:'East',        type:'commercial',  lat:21.1517, lon:79.1132, baseAqi:110, baseTraffic:85, baseEnergy:540, baseWater:880,  h:4 },
+  { id:'Z11',name:'Lakadganj',      area:'Central-E',   type:'mixed',       lat:21.1500, lon:79.1200, baseAqi:90,  baseTraffic:65, baseEnergy:410, baseWater:1050, h:3 },
+  { id:'Z12',name:'Pardi',          area:'North-East',  type:'residential', lat:21.1561, lon:79.1417, baseAqi:70,  baseTraffic:35, baseEnergy:300, baseWater:1150, h:2 },
+];
+
+// ══════════════════════════════════════════════════════════
+// SIMULATION STATE
+// ══════════════════════════════════════════════════════════
+const SIM = { tick:0, speed:2, paused:false, hour:8, dayMin:0 };
+const BUF_SIZE = 60;
+const zoneData = {};
+NAGPUR_ZONES.forEach(z => {
+  zoneData[z.id] = {
+    aqi: Array(BUF_SIZE).fill(z.baseAqi),
+    traffic: Array(BUF_SIZE).fill(z.baseTraffic),
+    energy: Array(BUF_SIZE).fill(z.baseEnergy),
+    water: Array(BUF_SIZE).fill(z.baseWater),
+    health: Array(BUF_SIZE).fill(80),
+  };
+});
+
+const events = [];
+let selectedZone = 'Z2';
+let activeMetric = 'aqi';
+let alertFeed = [];
+let sparkCharts = {};
+let currentPage = 'dashboard';
+let mapInstance = null;
+let mapReady = false;
+
+// ══════════════════════════════════════════════════════════
+// PAGE NAVIGATION
+// ══════════════════════════════════════════════════════════
+function switchPage(page) {
+  currentPage = page;
+  document.querySelectorAll('.nav-link').forEach(l => l.classList.remove('active'));
+  document.querySelector(`.nav-link[data-page="${page}"]`).classList.add('active');
+  document.querySelectorAll('.page-view').forEach(v => v.classList.remove('active'));
+  document.getElementById('page-' + page).classList.add('active');
+
+  // Lazy-init map on first visit
+  if (page === 'map' && !mapInstance) {
+    setTimeout(initMap, 100);
+  }
+  if (page === 'map' && mapInstance) {
+    setTimeout(() => mapInstance.resize(), 50);
+  }
+  if (page === 'analytics') {
+    setTimeout(updateAnalytics, 50);
+  }
+  if (page === 'alerts') {
+    renderAlertsPage();
+  }
+  if (page === 'dashboard') {
+    renderDashboard();
+  }
+}
+
+// ══════════════════════════════════════════════════════════
+// SIMULATION ENGINE
+// ══════════════════════════════════════════════════════════
+function pushBuf(arr, val) { arr.push(val); if(arr.length > BUF_SIZE) arr.shift(); }
+function randGauss(mean, std) {
+  let u=0,v=0; while(!u) u=Math.random(); while(!v) v=Math.random();
+  return mean + std * Math.sqrt(-2*Math.log(u)) * Math.cos(2*Math.PI*v);
+}
+function hourPattern(hour, peakH, nightH) {
+  if(nightH.includes(hour)) return 0.15;
+  if(peakH.includes(hour)) return 1.0;
+  return 0.5 + 0.35 * Math.sin((hour-6)/18*Math.PI);
+}
+
+function simStep() {
+  if(SIM.paused) return;
+  SIM.tick++;
+  SIM.dayMin += SIM.speed;
+  if(SIM.dayMin >= 1440) SIM.dayMin = 0;
+  SIM.hour = Math.floor(SIM.dayMin/60);
+  const hour = SIM.hour;
+
+  if(Math.random() < 0.003) spawnEvent();
+  for(let i=events.length-1;i>=0;i--){ events[i].ttl--; if(events[i].ttl<=0) events.splice(i,1); }
+
+  let cityHealth=0, critCount=0, anomCount=0;
+  NAGPUR_ZONES.forEach(z => {
+    const d = zoneData[z.id];
+    const ev = events.filter(e => e.zone === z.id);
+    const tM = hourPattern(hour,[8,9,17,18,19],[0,1,2,3,4]);
+    const eM = hourPattern(hour,[8,9,17,18,19,20],[1,2,3]);
+    const wM = hourPattern(hour,[6,7,8,18,19,20],[2,3,4]);
+
+    let aqi = z.baseAqi*(0.7+tM*0.5)+randGauss(0,z.baseAqi*0.05);
+    let traffic = z.baseTraffic*tM+randGauss(0,4);
+    let energy = z.baseEnergy*eM+randGauss(0,z.baseEnergy*0.04);
+    let water = z.baseWater*wM+randGauss(0,z.baseWater*0.04);
+
+    ev.forEach(e => {
+      if(e.type==='aqi_spike') aqi*=1.8+e.intensity;
+      if(e.type==='traffic_jam') traffic*=1.5+e.intensity;
+      if(e.type==='power_surge') energy*=2.0+e.intensity;
+      if(e.type==='pipe_burst') water*=3.0+e.intensity;
+    });
+
+    aqi=Math.max(30,Math.min(350,aqi)); traffic=Math.max(0,Math.min(100,traffic));
+    energy=Math.max(50,Math.min(3000,energy)); water=Math.max(50,Math.min(4000,water));
+    const h=Math.max(0,Math.min(100,(100-traffic)*0.3+Math.max(0,100-(aqi-40)/3.1)*0.35+Math.max(0,100-energy/30)*0.2+Math.min(100,water/40)*0.15));
+
+    pushBuf(d.aqi,Math.round(aqi)); pushBuf(d.traffic,Math.round(traffic));
+    pushBuf(d.energy,Math.round(energy)); pushBuf(d.water,Math.round(water)); pushBuf(d.health,Math.round(h));
+
+    cityHealth += h;
+    if(h < 35) critCount++;
+    const aqiMean = d.aqi.slice(-20).reduce((a,b)=>a+b)/20;
+    if(aqi > aqiMean*1.5 && aqi > 180){ anomCount++; maybeAlert(z,'aqi',aqi,'critical'); }
+    if(energy > z.baseEnergy*1.8){ anomCount++; maybeAlert(z,'energy',energy,'warning'); }
+  });
+
+  // Update header stats
+  const hEl = document.getElementById('h-health');
+  const avg = Math.round(cityHealth/NAGPUR_ZONES.length);
+  hEl.textContent = avg;
+  hEl.className = 'hstat-val ' + (avg > 65 ? 'green' : avg > 40 ? 'yellow' : 'red');
+  document.getElementById('h-critical').textContent = critCount;
+  const hh = String(SIM.hour).padStart(2,'0');
+  const mm = String(Math.floor(SIM.dayMin%60)).padStart(2,'0');
+  document.getElementById('h-tick').textContent = `${hh}:${mm}`;
+  document.getElementById('nav-alert-count').textContent = alertFeed.length ? `(${alertFeed.length})` : '';
+
+  // Update active page
+  if(currentPage === 'dashboard') renderDashboard();
+  if(currentPage === 'map' && mapReady) updateMapLibreData();
+  if(currentPage === 'analytics') updateAnalytics();
+  if(currentPage === 'alerts') renderAlertsPage();
+}
+
+// ══════════════════════════════════════════════════════════
+// EVENT SYSTEM
+// ══════════════════════════════════════════════════════════
+const EVENT_TYPES = ['aqi_spike','traffic_jam','power_surge','pipe_burst'];
+const EVENT_NAMES = {
+  aqi_spike:'🌫️ Industrial Pollution Spike', traffic_jam:'🚗 Severe Traffic Jam',
+  power_surge:'⚡ Power Grid Surge', pipe_burst:'💧 Water Main Burst',
+};
+
+function spawnEvent() {
+  const zone = NAGPUR_ZONES[Math.floor(Math.random()*NAGPUR_ZONES.length)];
+  const type = EVENT_TYPES[Math.floor(Math.random()*EVENT_TYPES.length)];
+  events.push({zone:zone.id,type,intensity:0.3+Math.random()*0.7,ttl:30+Math.floor(Math.random()*60)});
+  addAlert(zone, EVENT_NAMES[type], type.includes('aqi')||type.includes('power')?'critical':'warning');
+}
+
+let lastAlertZone = '';
+function maybeAlert(zone,metric,val,sev){
+  if(lastAlertZone===zone.id+metric) return;
+  lastAlertZone = zone.id+metric;
+  addAlert(zone,`${metric.toUpperCase()} anomaly: ${Math.round(val)}`,sev);
+}
+
+function addAlert(zone,msg,sev){
+  const now = new Date();
+  const t = `${String(now.getHours()).padStart(2,'0')}:${String(now.getMinutes()).padStart(2,'0')}:${String(now.getSeconds()).padStart(2,'0')}`;
+  alertFeed.unshift({zone:zone.name,msg,sev,time:t});
+  if(alertFeed.length>50) alertFeed.pop();
+}
+
+// ══════════════════════════════════════════════════════════
+// DASHBOARD PAGE
+// ══════════════════════════════════════════════════════════
+function renderDashboard() {
+  // Stats cards
+  const avgHealth = Math.round(NAGPUR_ZONES.reduce((s,z) => s+zoneData[z.id].health.at(-1),0)/NAGPUR_ZONES.length);
+  const avgAqi = Math.round(NAGPUR_ZONES.reduce((s,z) => s+zoneData[z.id].aqi.at(-1),0)/NAGPUR_ZONES.length);
+  const critCount = NAGPUR_ZONES.filter(z => zoneData[z.id].health.at(-1)<35).length;
+  const activeEvents = events.length;
+
+  document.getElementById('dash-stats').innerHTML = `
+    <div class="stat-card g"><div class="sc-label">City Health Score</div><div class="sc-value" style="color:${avgHealth>65?'var(--green)':avgHealth>40?'var(--yellow)':'var(--red)'}">${avgHealth}</div><div class="sc-sub">out of 100</div></div>
+    <div class="stat-card ${avgAqi>150?'r':avgAqi>80?'y':'g'}"><div class="sc-label">Average AQI</div><div class="sc-value">${avgAqi}</div><div class="sc-sub">${avgAqi>150?'Unhealthy':avgAqi>80?'Moderate':'Good'}</div></div>
+    <div class="stat-card r"><div class="sc-label">Critical Zones</div><div class="sc-value" style="color:var(--red)">${critCount}</div><div class="sc-sub">of ${NAGPUR_ZONES.length} zones</div></div>
+    <div class="stat-card c"><div class="sc-label">Active Incidents</div><div class="sc-value" style="color:var(--orange)">${activeEvents}</div><div class="sc-sub">${alertFeed.length} total alerts</div></div>
+  `;
+
+  // Zone cards
+  document.getElementById('dash-zones').innerHTML = NAGPUR_ZONES.map(z => {
+    const d = zoneData[z.id];
+    const h = d.health.at(-1);
+    const status = h<35?'critical':h<65?'warning':'good';
+    return `<div class="zone-card ${status}" onclick="selectedZone='${z.id}';switchPage('analytics')">
+      <div class="zc-head">
+        <div><div class="zc-name">${z.name}</div><div class="zc-type">${z.area} · ${z.type}</div></div>
+        <div class="health-ring ${status}">${h}</div>
+      </div>
+      <div class="zc-metrics">
+        <div class="zm"><span class="zm-k">AQI</span><span class="zm-v" style="color:${d.aqi.at(-1)>150?'var(--red)':d.aqi.at(-1)>80?'var(--yellow)':'var(--green)'}">${d.aqi.at(-1)}</span></div>
+        <div class="zm"><span class="zm-k">Traffic</span><span class="zm-v">${d.traffic.at(-1)}/100</span></div>
+        <div class="zm"><span class="zm-k">Energy</span><span class="zm-v">${d.energy.at(-1)}kWh</span></div>
+        <div class="zm"><span class="zm-k">Water</span><span class="zm-v">${d.water.at(-1)}L</span></div>
+      </div>
+    </div>`;
+  }).join('');
+}
+
+// ══════════════════════════════════════════════════════════
+// MAP PAGE
+// ══════════════════════════════════════════════════════════
+const NAGPUR_BOUNDARY = turf.polygon([[
+  [79.0000,21.0800],[79.0200,21.0650],[79.0550,21.0600],
+  [79.0900,21.0640],[79.1200,21.0700],[79.1500,21.0800],
+  [79.1650,21.0950],[79.1700,21.1150],[79.1700,21.1400],
+  [79.1650,21.1600],[79.1550,21.1800],[79.1400,21.2000],
+  [79.1200,21.2100],[79.1000,21.2150],[79.0750,21.2100],
+  [79.0500,21.2000],[79.0300,21.1850],[79.0100,21.1650],
+  [78.9950,21.1400],[78.9900,21.1150],[78.9950,21.0950],
+  [79.0000,21.0800]
+]]);
+
+function initMap() {
+  mapInstance = new maplibregl.Map({
+    container:'map',
+    style:'https://basemaps.cartocdn.com/gl/dark-matter-gl-style/style.json',
+    center:[79.0882,21.1458], zoom:12, pitch:55, bearing:-15, antialias:true
+  });
+  mapInstance.addControl(new maplibregl.NavigationControl(),'top-right');
+
+  mapInstance.on('load', () => {
+    const cartoSrc = Object.keys(mapInstance.getStyle().sources).find(s => s!=='zones');
+
+    mapInstance.addSource('zones',{type:'geojson',data:getZonesGeoJSON(),promoteId:'id'});
+    mapInstance.addLayer({id:'zones-fill',type:'fill',source:'zones',paint:{'fill-color':['get','color'],'fill-opacity':0.30}});
+    mapInstance.addLayer({id:'zones-line',type:'line',source:'zones',paint:{'line-color':['get','color'],'line-width':2,'line-opacity':0.7}});
+    mapInstance.addLayer({id:'zones-highlight',type:'line',source:'zones',paint:{'line-color':'#00e5ff','line-width':['case',['boolean',['feature-state','hover'],false],4,0]}});
+
+    // ── POLLUTION HEATMAP ──
+    mapInstance.addSource('pollution-heat',{type:'geojson',data:getPollutionGeoJSON()});
+    mapInstance.addLayer({
+      id:'pollution-heatmap',type:'heatmap',source:'pollution-heat',
+      paint:{
+        'heatmap-weight':['get','intensity'],
+        'heatmap-intensity':['interpolate',['linear'],['zoom'],10,0.8,14,2.5],
+        'heatmap-radius':['interpolate',['linear'],['zoom'],10,30,14,60],
+        'heatmap-color':[
+          'interpolate',['linear'],['heatmap-density'],
+          0,'rgba(0,0,0,0)',
+          0.15,'rgba(50,50,80,0.2)',
+          0.3,'rgba(80,80,120,0.35)',
+          0.5,'rgba(140,100,60,0.5)',
+          0.7,'rgba(200,80,30,0.6)',
+          0.9,'rgba(255,50,20,0.7)',
+          1,'rgba(255,20,10,0.85)'
+        ],
+        'heatmap-opacity':['interpolate',['linear'],['zoom'],10,0.7,15,0.5]
+      }
+    });
+
+    // ── TRAFFIC ROAD COLORING ──
+    // GeoJSON source that will hold colored road segments
+    mapInstance.addSource('traffic-roads',{type:'geojson',data:{type:'FeatureCollection',features:[]}});
+    // Outer glow on roads
+    mapInstance.addLayer({
+      id:'traffic-road-glow',type:'line',source:'traffic-roads',
+      paint:{
+        'line-color':['get','color'],
+        'line-width':['interpolate',['linear'],['get','congestion'],0,2,50,6,100,12],
+        'line-blur':4,
+        'line-opacity':0.4
+      }
+    });
+    // Inner colored road line
+    mapInstance.addLayer({
+      id:'traffic-road-line',type:'line',source:'traffic-roads',
+      paint:{
+        'line-color':['get','color'],
+        'line-width':['interpolate',['linear'],['get','congestion'],0,1,50,3,100,6],
+        'line-opacity':['interpolate',['linear'],['get','congestion'],0,0.2,30,0.5,60,0.7,100,0.9]
+      }
+    });
+
+    // 3D Buildings
+    if(cartoSrc){
+      mapInstance.addLayer({
+        id:'3d-buildings',source:cartoSrc,'source-layer':'building',type:'fill-extrusion',minzoom:13,
+        paint:{
+          'fill-extrusion-color':['interpolate',['linear'],['coalesce',['get','render_height'],10],0,'#1a2332',20,'#243650',50,'#2a4060'],
+          'fill-extrusion-height':['coalesce',['get','render_height'],10],
+          'fill-extrusion-base':['coalesce',['get','render_min_height'],0],
+          'fill-extrusion-opacity':0.75
+        }
+      });
+
+      // Road highlight
+      mapInstance.addSource('road-highlight',{type:'geojson',data:{type:'FeatureCollection',features:[]}});
+      mapInstance.addLayer({id:'road-hl-glow',type:'line',source:'road-highlight',paint:{'line-color':'#00e5ff','line-width':14,'line-opacity':0.2}});
+      mapInstance.addLayer({id:'road-hl-line',type:'line',source:'road-highlight',paint:{'line-color':'#00e5ff','line-width':5,'line-opacity':0.9}});
+
+      mapInstance.on('click',(e)=>{
+        const rls = mapInstance.getStyle().layers.filter(l=>l['source-layer']==='transportation'&&l.source===cartoSrc).map(l=>l.id);
+        const rf = mapInstance.queryRenderedFeatures(e.point,{layers:rls});
+        if(rf.length>0){
+          const r=rf[0],p=r.properties||{};
+          let inZone='Unknown';let minD=Infinity;
+          NAGPUR_ZONES.forEach(z=>{const d=Math.hypot(e.lngLat.lng-z.lon,e.lngLat.lat-z.lat);if(d<minD){minD=d;inZone=z.name;}});
+          if(r.geometry) mapInstance.getSource('road-highlight').setData({type:'FeatureCollection',features:[r]});
+          const tt=document.getElementById('map-tooltip');
+          document.getElementById('tt-name').textContent='🛣️ '+(p.name||'Unnamed Road');
+          document.getElementById('tt-body').innerHTML=`
+            <div class="tt-row"><span class="tt-key">Class</span><span class="tt-val" style="text-transform:capitalize">${p.class||'road'}</span></div>
+            <div class="tt-row"><span class="tt-key">Zone</span><span class="tt-val">${inZone}</span></div>
+            <div class="tt-row"><span class="tt-key">Coords</span><span class="tt-val">${e.lngLat.lat.toFixed(4)}, ${e.lngLat.lng.toFixed(4)}</span></div>`;
+          tt.style.display='block';tt.style.left=Math.min(e.point.x+16,window.innerWidth-260)+'px';tt.style.top=Math.min(e.point.y-40,window.innerHeight-200)+'px';
+        } else {
+          mapInstance.getSource('road-highlight').setData({type:'FeatureCollection',features:[]});
+        }
+      });
+    }
+    mapReady = true;
+  });
+
+  // Zone hover
+  let mapHoveredId = null;
+  mapInstance.on('mousemove','zones-fill',(e)=>{
+    if(!e.features.length) return;
+    const fid=e.features[0].properties.id||e.features[0].id;
+    if(mapHoveredId!==null&&mapHoveredId!==fid) mapInstance.setFeatureState({source:'zones',id:mapHoveredId},{hover:false});
+    mapHoveredId=fid; mapInstance.setFeatureState({source:'zones',id:mapHoveredId},{hover:true});
+    mapInstance.getCanvas().style.cursor='pointer';
+    const zone=NAGPUR_ZONES.find(z=>z.id===mapHoveredId);
+    if(zone){
+      const d=zoneData[zone.id];const tt=document.getElementById('map-tooltip');
+      document.getElementById('tt-name').textContent=zone.name.toUpperCase();
+      document.getElementById('tt-body').innerHTML=`
+        <div class="tt-row"><span class="tt-key">Area</span><span class="tt-val">${zone.area}</span></div>
+        <div class="tt-row"><span class="tt-key">AQI</span><span class="tt-val" style="color:${d.aqi.at(-1)>150?'var(--red)':'var(--green)'}">${d.aqi.at(-1)}</span></div>
+        <div class="tt-row"><span class="tt-key">Traffic</span><span class="tt-val">${d.traffic.at(-1)}/100</span></div>
+        <div class="tt-row"><span class="tt-key">Health</span><span class="tt-val" style="color:${d.health.at(-1)<40?'var(--red)':'var(--green)'}">${d.health.at(-1)}/100</span></div>`;
+      tt.style.display='block';tt.style.left=Math.min(e.point.x+16,window.innerWidth-220)+'px';tt.style.top=Math.min(e.point.y-40,window.innerHeight-200)+'px';
+    }
+  });
+  mapInstance.on('mouseleave','zones-fill',()=>{
+    if(mapHoveredId!==null) mapInstance.setFeatureState({source:'zones',id:mapHoveredId},{hover:false});
+    mapInstance.getCanvas().style.cursor='';mapHoveredId=null;
+    document.getElementById('map-tooltip').style.display='none';
+  });
+  mapInstance.on('click','zones-fill',(e)=>{
+    if(!e.features.length) return;
+    selectedZone=e.features[0].properties.id||e.features[0].id;
+  });
+}
+
+// Voronoi zones clipped to Nagpur boundary
+let voronoiPolys = null;
+function getVoronoiZones(){
+  if(voronoiPolys) return voronoiPolys;
+  const pts=turf.featureCollection(NAGPUR_ZONES.map(z=>turf.point([z.lon,z.lat],{id:z.id})));
+  const bc=NAGPUR_BOUNDARY.geometry.coordinates[0];
+  const bbox=[Math.min(...bc.map(c=>c[0])),Math.min(...bc.map(c=>c[1])),Math.max(...bc.map(c=>c[0])),Math.max(...bc.map(c=>c[1]))];
+  const v=turf.voronoi(pts,{bbox}); const cl=[];
+  v.features.forEach((f,i)=>{
+    if(!f||!f.geometry) return;
+    try{
+      const c=turf.intersect(turf.featureCollection([f,NAGPUR_BOUNDARY]));
+      if(c){c.id=NAGPUR_ZONES[i].id;c.properties={id:NAGPUR_ZONES[i].id};cl.push(c);}
+    }catch(e){f.id=NAGPUR_ZONES[i].id;f.properties={id:NAGPUR_ZONES[i].id};cl.push(f);}
+  });
+  voronoiPolys={type:'FeatureCollection',features:cl};
+  return voronoiPolys;
+}
+
+function getMetricVal(zid){
+  const d=zoneData[zid];if(!d)return 0;const l=a=>a[a.length-1]||0;
+  switch(activeMetric){case'aqi':return l(d.aqi);case'traffic':return l(d.traffic);case'energy':return l(d.energy);case'water':return l(d.water);case'health':return l(d.health);default:return 0;}
+}
+function metricToColor(val,metric){
+  if(metric==='health'){if(val>65)return{top:'#00ff88'};if(val>40)return{top:'#ffd60a'};return{top:'#ff3b3b'};}
+  const ranges={aqi:[40,300],traffic:[0,100],energy:[50,3000],water:[50,4000]};
+  const[lo,hi]=ranges[metric]||[0,100];const t=Math.max(0,Math.min(1,(val-lo)/(hi-lo)));
+  if(t<0.33)return{top:'#00ff88'};if(t<0.55)return{top:'#ffd60a'};if(t<0.75)return{top:'#ff8800'};return{top:'#ff3b3b'};
+}
+function lerpColor(c1,c2,t){
+  const h=s=>parseInt(s,16);
+  const r1=h(c1.slice(1,3)),g1=h(c1.slice(3,5)),b1=h(c1.slice(5,7));
+  const r2=h(c2.slice(1,3)),g2=h(c2.slice(3,5)),b2=h(c2.slice(5,7));
+  return `rgb(${Math.round(r1+(r2-r1)*t)},${Math.round(g1+(g2-g1)*t)},${Math.round(b1+(b2-b1)*t)})`;
+}
+
+function getZonesGeoJSON(){
+  const coll=getVoronoiZones();
+  const features=JSON.parse(JSON.stringify(coll.features));
+  features.forEach(f=>{
+    const z=NAGPUR_ZONES.find(zone=>zone.id===f.id);if(!z)return;
+    const val=getMetricVal(z.id);const colors=metricToColor(val,activeMetric);
+    const hasAlert=events.some(e=>e.zone===z.id);
+    let color=colors.top;
+    if(hasAlert&&Math.sin(SIM.tick*0.4)>0) color='#ff3b3b';
+    else if(z.id===selectedZone) color=lerpColor(colors.top,'#00e5ff',0.4);
+    f.properties.color=color;
+  });
+  return{type:'FeatureCollection',features};
+}
+
+function updateMapLibreData(){
+  if(!mapInstance) return;
+  if(mapInstance.getSource('zones')) mapInstance.getSource('zones').setData(getZonesGeoJSON());
+  if(mapInstance.getSource('pollution-heat')) mapInstance.getSource('pollution-heat').setData(getPollutionGeoJSON());
+  // Update traffic road coloring every 3 ticks (to avoid performance issues)
+  if(mapInstance.getSource('traffic-roads') && SIM.tick % 3 === 0) updateTrafficRoads();
+}
+
+// Query actual road features from vector tiles and color them by nearest zone's traffic
+function updateTrafficRoads(){
+  if(!mapInstance || !mapReady) return;
+  const style = mapInstance.getStyle();
+  const cartoSrc = Object.keys(style.sources).find(s => s !== 'zones' && s !== 'pollution-heat' && s !== 'traffic-roads' && s !== 'road-highlight');
+  if(!cartoSrc) return;
+
+  // Find all transportation layers from the vector tiles
+  const roadLayerIds = style.layers
+    .filter(l => l['source-layer'] === 'transportation' && l.source === cartoSrc)
+    .map(l => l.id);
+  if(!roadLayerIds.length) return;
+
+  // Query all currently visible road features
+  const roadFeatures = mapInstance.queryRenderedFeatures({layers: roadLayerIds});
+  if(!roadFeatures.length) return;
+
+  // Color each road based on the nearest zone's traffic
+  const coloredFeatures = [];
+  const seen = new Set();
+  roadFeatures.forEach(rf => {
+    // Deduplicate by feature id
+    const fKey = (rf.id || '') + '_' + (rf.properties.name || '') + '_' + (rf.geometry.type);
+    if(seen.has(fKey)) return;
+    seen.add(fKey);
+
+    // Find nearest zone to this road's centroid
+    let cx, cy;
+    if(rf.geometry.type === 'LineString'){
+      const mid = Math.floor(rf.geometry.coordinates.length / 2);
+      [cx, cy] = rf.geometry.coordinates[mid];
+    } else if(rf.geometry.type === 'MultiLineString'){
+      const line = rf.geometry.coordinates[0];
+      const mid = Math.floor(line.length / 2);
+      [cx, cy] = line[mid];
+    } else if(rf.geometry.type === 'Point'){
+      [cx, cy] = rf.geometry.coordinates;
+    } else { return; }
+
+    let nearestZone = NAGPUR_ZONES[0], minDist = Infinity;
+    NAGPUR_ZONES.forEach(z => {
+      const d = Math.hypot(cx - z.lon, cy - z.lat);
+      if(d < minDist){ minDist = d; nearestZone = z; }
+    });
+
+    const congestion = zoneData[nearestZone.id].traffic.at(-1);
+    // Skip low-traffic roads
+    if(congestion < 20) return;
+
+    // Color: green → yellow → orange → red
+    let color;
+    if(congestion < 40) color = '#22c55e';
+    else if(congestion < 60) color = '#eab308';
+    else if(congestion < 80) color = '#f97316';
+    else color = '#ef4444';
+
+    coloredFeatures.push({
+      type: 'Feature',
+      geometry: rf.geometry,
+      properties: { congestion, color, zone: nearestZone.name }
+    });
+  });
+
+  mapInstance.getSource('traffic-roads').setData({type:'FeatureCollection', features: coloredFeatures});
+}
+
+// Generate scattered pollution points around each zone
+function getPollutionGeoJSON(){
+  const features = [];
+  NAGPUR_ZONES.forEach(z => {
+    const d = zoneData[z.id];
+    const aqi = d.aqi.at(-1);
+    const intensity = Math.min(1, Math.max(0, (aqi - 30) / 300));
+    const numPoints = Math.floor(3 + intensity * 25);
+    for(let i = 0; i < numPoints; i++){
+      const spread = z.type === 'industrial' ? 0.015 : 0.008;
+      const angle = Math.random() * Math.PI * 2;
+      const dist = Math.random() * spread;
+      const drift = Math.sin(SIM.tick * 0.1 + i) * 0.002;
+      features.push({
+        type:'Feature',
+        geometry:{type:'Point',coordinates:[
+          z.lon + Math.cos(angle) * dist + drift,
+          z.lat + Math.sin(angle) * dist + drift * 0.5
+        ]},
+        properties:{intensity: intensity * (0.5 + Math.random() * 0.5), aqi}
+      });
+    }
+  });
+  return {type:'FeatureCollection', features};
+}
+
+// ══════════════════════════════════════════════════════════
+// ANALYTICS PAGE
+// ══════════════════════════════════════════════════════════
+const SPARK_COLORS = {aqi:'#00e5ff',traffic:'#ff3b3b',energy:'#ffd60a',water:'#3b82f6'};
+
+function initSparklines(){
+  const sel=document.getElementById('analytics-zone-select');
+  sel.innerHTML=NAGPUR_ZONES.map(z=>`<option value="${z.id}" ${z.id===selectedZone?'selected':''}>${z.name} (${z.area})</option>`).join('');
+
+  ['aqi','traffic','energy','water'].forEach(m=>{
+    const canvas=document.getElementById('sp-'+m); if(!canvas) return;
+    const ctx=canvas.getContext('2d');const color=SPARK_COLORS[m];
+    const grad=ctx.createLinearGradient(0,0,0,120);grad.addColorStop(0,color+'44');grad.addColorStop(1,color+'00');
+    sparkCharts[m]=new Chart(ctx,{
+      type:'line',data:{labels:Array(BUF_SIZE).fill(''),datasets:[{data:zoneData[selectedZone][m],borderColor:color,backgroundColor:grad,borderWidth:1.5,fill:true,tension:0.4,pointRadius:0}]},
+      options:{responsive:false,maintainAspectRatio:false,animation:false,plugins:{legend:{display:false},tooltip:{enabled:false}},scales:{x:{display:false},y:{display:true,grid:{color:'rgba(28,45,66,0.5)'},ticks:{color:'#4a6480',font:{size:9},maxTicksLimit:4}}}}
+    });
+  });
+}
+
+function updateAnalytics(){
+  const d=zoneData[selectedZone];
+  ['aqi','traffic','energy','water'].forEach(m=>{
+    if(!sparkCharts[m])return;
+    sparkCharts[m].data.datasets[0].data=[...d[m]];sparkCharts[m].update('none');
+  });
+
+  // Correlation grid
+  const z=NAGPUR_ZONES.find(z=>z.id===selectedZone);
+  if(z){
+    document.getElementById('corr-grid').innerHTML=`
+      <div class="corr-card"><div class="corr-val" style="color:${d.aqi.at(-1)>150?'var(--red)':'var(--green)'}">${d.aqi.at(-1)}</div><div class="corr-lbl">Current AQI</div></div>
+      <div class="corr-card"><div class="corr-val" style="color:${d.traffic.at(-1)>60?'var(--yellow)':'var(--cyan)'}">${d.traffic.at(-1)}</div><div class="corr-lbl">Traffic Index</div></div>
+      <div class="corr-card"><div class="corr-val">${d.energy.at(-1)}</div><div class="corr-lbl">Energy kWh</div></div>
+      <div class="corr-card"><div class="corr-val">${d.water.at(-1)}</div><div class="corr-lbl">Water L/hr</div></div>
+      <div class="corr-card"><div class="corr-val" style="color:${d.health.at(-1)<40?'var(--red)':d.health.at(-1)<65?'var(--yellow)':'var(--green)'}">${d.health.at(-1)}</div><div class="corr-lbl">Health Score</div></div>
+      <div class="corr-card"><div class="corr-val" style="color:var(--orange)">${events.filter(e=>e.zone===selectedZone).length}</div><div class="corr-lbl">Active Events</div></div>`;
+  }
+}
+
+// ══════════════════════════════════════════════════════════
+// ALERTS PAGE
+// ══════════════════════════════════════════════════════════
+function renderAlertsPage(){
+  document.getElementById('alert-total').textContent=alertFeed.length;
+  document.getElementById('alert-crit-count').textContent=alertFeed.filter(a=>a.sev==='critical').length;
+  document.getElementById('alert-warn-count').textContent=alertFeed.filter(a=>a.sev==='warning').length;
+
+  const list=document.getElementById('alert-list');
+  if(!alertFeed.length){list.innerHTML='<div style="color:var(--muted);text-align:center;padding:40px;font-size:14px">No alerts yet. Simulation is running...</div>';return;}
+  list.innerHTML=alertFeed.slice(0,40).map(a=>`
+    <div class="alert-item ${a.sev}">
+      <div class="alert-zone">${a.zone}</div>
+      <div class="alert-msg">${a.msg}</div>
+      <div class="alert-time">⏱ ${a.time}</div>
+    </div>`).join('');
+}
+
+// ══════════════════════════════════════════════════════════
+// NLP QUERY
+// ══════════════════════════════════════════════════════════
+function nlpQuery(q){
+  if(!q||!q.trim())return;
+  document.getElementById('nlp-input').value='';
+  const lower=q.toLowerCase();
+  const latest=id=>zoneData[id];let answer='';
+  if(lower.match(/aqi|air|pollution/)){
+    const w=NAGPUR_ZONES.reduce((a,b)=>latest(a.id).aqi.at(-1)>latest(b.id).aqi.at(-1)?a:b);
+    answer=`🌫️ ${w.name} has worst AQI: ${latest(w.id).aqi.at(-1)}.`;selectedZone=w.id;
+  } else if(lower.match(/traffic|jam/)){
+    const w=NAGPUR_ZONES.reduce((a,b)=>latest(a.id).traffic.at(-1)>latest(b.id).traffic.at(-1)?a:b);
+    answer=`🚗 ${w.name}: Traffic ${latest(w.id).traffic.at(-1)}/100.`;selectedZone=w.id;
+  } else if(lower.match(/energy|power/)){
+    const w=NAGPUR_ZONES.reduce((a,b)=>latest(a.id).energy.at(-1)>latest(b.id).energy.at(-1)?a:b);
+    answer=`⚡ ${w.name}: ${latest(w.id).energy.at(-1)} kWh.`;selectedZone=w.id;
+  } else if(lower.match(/water|pipe/)){
+    const w=NAGPUR_ZONES.reduce((a,b)=>latest(a.id).water.at(-1)>latest(b.id).water.at(-1)?a:b);
+    answer=`💧 ${w.name}: ${latest(w.id).water.at(-1)} L/hr.`;selectedZone=w.id;
+  } else if(lower.match(/critical|danger/)){
+    const c=NAGPUR_ZONES.filter(z=>latest(z.id).health.at(-1)<35);
+    answer=c.length?`⛔ Critical: ${c.map(z=>z.name).join(', ')}`:'✅ No critical zones.';
+  } else if(lower.match(/health|city/)){
+    const avg=Math.round(NAGPUR_ZONES.reduce((s,z)=>s+latest(z.id).health.at(-1),0)/NAGPUR_ZONES.length);
+    answer=`🏙️ City health: ${avg}/100. ${events.length} active incidents.`;
+  } else { answer='💡 Try: "worst AQI", "traffic jam", "energy overload", "city health"'; }
+  const res=document.getElementById('nlp-result');res.style.display='block';res.textContent=answer;
+}
+
+// ══════════════════════════════════════════════════════════
+// CONTROLS
+// ══════════════════════════════════════════════════════════
+function switchMetric(m){
+  activeMetric=m;
+  const LEGENDS={aqi:'Air Quality Index',traffic:'Traffic Congestion',energy:'Energy Load',water:'Water Usage',health:'Zone Health'};
+  const el=document.getElementById('leg-title');if(el) el.textContent=LEGENDS[m]||m;
+}
+function setSpeed(s){
+  SIM.speed=s;
+  document.querySelectorAll('.map-toolbar .tool-btn').forEach(b=>{
+    if(['1×','2×','5×'].some(x=>b.textContent.trim()===x)) b.classList.remove('active');
+    if(b.textContent.trim()===s+'×') b.classList.add('active');
+  });
+}
+function togglePause(){
+  SIM.paused=!SIM.paused;
+  const btn=document.getElementById('paused-btn');
+  btn.textContent=SIM.paused?'▶ Resume':'⏸ Pause';
+  btn.style.color=SIM.paused?'var(--green)':'var(--yellow)';
+}
+
+// ══════════════════════════════════════════════════════════
+// BOOT
+// ══════════════════════════════════════════════════════════
+window.addEventListener('load',()=>{
+  requestAnimationFrame(()=>{requestAnimationFrame(()=>{
+    // Pre-warm simulation
+    SIM.paused=true;
+    for(let i=0;i<BUF_SIZE;i++){
+      SIM.tick++;SIM.dayMin+=SIM.speed;if(SIM.dayMin>=1440)SIM.dayMin=0;SIM.hour=Math.floor(SIM.dayMin/60);
+      NAGPUR_ZONES.forEach(z=>{
+        const d=zoneData[z.id];const tM=0.5+0.35*Math.sin((SIM.hour-6)/18*Math.PI);
+        let aqi=z.baseAqi*(0.7+tM*0.5)+randGauss(0,z.baseAqi*0.05);
+        let traffic=z.baseTraffic*tM+randGauss(0,4);
+        let energy=z.baseEnergy*tM+randGauss(0,z.baseEnergy*0.04);
+        let water=z.baseWater*tM+randGauss(0,z.baseWater*0.04);
+        aqi=Math.max(30,Math.min(350,aqi));traffic=Math.max(0,Math.min(100,traffic));
+        energy=Math.max(50,Math.min(3000,energy));water=Math.max(50,Math.min(4000,water));
+        const h=Math.max(0,Math.min(100,(100-traffic)*0.3+Math.max(0,100-(aqi-40)/3.1)*0.35+Math.max(0,100-energy/30)*0.2+Math.min(100,water/40)*0.15));
+        pushBuf(d.aqi,Math.round(aqi));pushBuf(d.traffic,Math.round(traffic));
+        pushBuf(d.energy,Math.round(energy));pushBuf(d.water,Math.round(water));pushBuf(d.health,Math.round(h));
+      });
+    }
+    SIM.paused=false;
+    renderDashboard();
+    initSparklines();
+    setInterval(simStep,500);
+  });});
+});
+
+
+
+================================================
+FILE: files/frontend/index.html
+================================================
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>NexaCity Nagpur — Urban Intelligence</title>
+<link href="https://fonts.googleapis.com/css2?family=Bebas+Neue&family=IBM+Plex+Mono:wght@400;500;600&family=Outfit:wght@300;400;600;700;900&display=swap" rel="stylesheet">
+<script src="https://unpkg.com/maplibre-gl@4.1.2/dist/maplibre-gl.js"></script>
+<link href="https://unpkg.com/maplibre-gl@4.1.2/dist/maplibre-gl.css" rel="stylesheet" />
+<script src="https://unpkg.com/@turf/turf/turf.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+<div class="scanlines"></div>
+
+<!-- ══════════ TOP NAVIGATION ══════════ -->
+<nav class="top-nav">
+  <div class="nav-left">
+    <div class="logo">
+      <div class="logo-mark">🏙️</div>
+      <div class="logo-wordmark">Nexa<em>City</em></div>
+    </div>
+    <div class="nav-links">
+      <div class="nav-link active" data-page="dashboard" onclick="switchPage('dashboard')">
+        <span class="nav-icon">📊</span> Dashboard
+      </div>
+      <div class="nav-link" data-page="map" onclick="switchPage('map')">
+        <span class="nav-icon">🗺️</span> 3D Map
+      </div>
+      <div class="nav-link" data-page="analytics" onclick="switchPage('analytics')">
+        <span class="nav-icon">📈</span> Analytics
+      </div>
+      <div class="nav-link" data-page="alerts" onclick="switchPage('alerts')">
+        <span class="nav-icon">🚨</span> Alerts <span id="nav-alert-count" style="color:var(--red);font-size:10px"></span>
+      </div>
+    </div>
+  </div>
+  <div class="nav-right">
+    <div class="hstat"><div class="hstat-val green" id="h-health">--</div><div class="hstat-lbl">Health</div></div>
+    <div class="hstat-sep"></div>
+    <div class="hstat"><div class="hstat-val red" id="h-critical">0</div><div class="hstat-lbl">Critical</div></div>
+    <div class="hstat-sep"></div>
+    <div class="hstat"><div class="hstat-val" id="h-tick">08:00</div><div class="hstat-lbl">Sim Time</div></div>
+    <div class="hstat-sep"></div>
+    <div class="live-pill"><div class="pulse"></div> LIVE</div>
+  </div>
+</nav>
+
+<!-- ══════════ PAGE CONTAINER ══════════ -->
+<div class="page-container">
+
+  <!-- ═══ DASHBOARD PAGE ═══ -->
+  <div class="page-view active" id="page-dashboard">
+    <div class="dash-page">
+      <!-- Stats Row -->
+      <div class="dash-grid" id="dash-stats"></div>
+
+      <!-- Zone Cards -->
+      <div class="dash-section-title">ZONE OVERVIEW</div>
+      <div class="zone-grid" id="dash-zones"></div>
+    </div>
+  </div>
+
+  <!-- ═══ MAP PAGE ═══ -->
+  <div class="page-view" id="page-map">
+    <div class="map-page" style="width:100%;height:100%;display:flex;flex-direction:column">
+      <div class="map-toolbar">
+        <span style="font-size:10px;color:var(--muted);letter-spacing:1px;text-transform:uppercase">Metric:</span>
+        <select class="metric-sel" id="metric-select" onchange="switchMetric(this.value)">
+          <option value="aqi">Air Quality (AQI)</option>
+          <option value="traffic">Traffic Congestion</option>
+          <option value="energy">Energy Load (kWh)</option>
+          <option value="water">Water Usage (L/hr)</option>
+          <option value="health">Zone Health Score</option>
+        </select>
+        <div style="margin-left:auto;display:flex;gap:8px;align-items:center">
+          <button class="tool-btn" onclick="setSpeed(1)">1×</button>
+          <button class="tool-btn active" onclick="setSpeed(2)">2×</button>
+          <button class="tool-btn" onclick="setSpeed(5)">5×</button>
+          <button class="tool-btn" id="paused-btn" onclick="togglePause()" style="color:var(--yellow)">⏸ Pause</button>
+        </div>
+      </div>
+      <div class="map-wrap">
+        <div id="map" style="width:100%;height:100%"></div>
+        <div class="map-legend">
+          <div class="leg-title" id="leg-title">Air Quality Index</div>
+          <div class="leg-item"><div class="leg-swatch" style="background:#00ff88"></div><span>Good</span></div>
+          <div class="leg-item"><div class="leg-swatch" style="background:#ffd60a"></div><span>Moderate</span></div>
+          <div class="leg-item"><div class="leg-swatch" style="background:#ff8800"></div><span>Unhealthy</span></div>
+          <div class="leg-item"><div class="leg-swatch" style="background:#ff3b3b"></div><span>Hazardous</span></div>
+        </div>
+        <div class="map-tooltip" id="map-tooltip">
+          <div class="tt-title" id="tt-name">Zone</div>
+          <div id="tt-body"></div>
+        </div>
+      </div>
+      <!-- NLP Bar -->
+      <div class="nlp-bar">
+        <div class="nlp-chips">
+          <span class="nlp-chip" onclick="nlpQuery(this.innerText)">Worst AQI zone?</span>
+          <span class="nlp-chip" onclick="nlpQuery(this.innerText)">Critical zones?</span>
+          <span class="nlp-chip" onclick="nlpQuery(this.innerText)">Energy overload?</span>
+          <span class="nlp-chip" onclick="nlpQuery(this.innerText)">City health?</span>
+        </div>
+        <input class="nlp-input" id="nlp-input" placeholder="Ask about city data..." onkeydown="if(event.key==='Enter')nlpQuery(this.value)">
+        <button class="nlp-btn" onclick="nlpQuery(document.getElementById('nlp-input').value)">Query ▶</button>
+        <div class="nlp-result" id="nlp-result" style="display:none"></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ═══ ANALYTICS PAGE ═══ -->
+  <div class="page-view" id="page-analytics">
+    <div class="analytics-page">
+      <div class="analytics-header">
+        <div class="dash-section-title">LIVE METRICS</div>
+        <select class="zone-select" id="analytics-zone-select" onchange="selectedZone=this.value;updateAnalytics()"></select>
+      </div>
+      <div class="chart-grid">
+        <div class="chart-card"><div class="chart-card-title">Air Quality (AQI) — Last 60s</div><div class="sparkline-wrap"><canvas class="sparkline" id="sp-aqi"></canvas></div></div>
+        <div class="chart-card"><div class="chart-card-title">Traffic Congestion — Last 60s</div><div class="sparkline-wrap"><canvas class="sparkline" id="sp-traffic"></canvas></div></div>
+        <div class="chart-card"><div class="chart-card-title">Energy Load (kWh) — Last 60s</div><div class="sparkline-wrap"><canvas class="sparkline" id="sp-energy"></canvas></div></div>
+        <div class="chart-card"><div class="chart-card-title">Water Usage (L/hr) — Last 60s</div><div class="sparkline-wrap"><canvas class="sparkline" id="sp-water"></canvas></div></div>
+      </div>
+      <div class="dash-section-title" style="margin-top:8px">ZONE CORRELATION SUMMARY</div>
+      <div class="correlation-grid" id="corr-grid"></div>
+    </div>
+  </div>
+
+  <!-- ═══ ALERTS PAGE ═══ -->
+  <div class="page-view" id="page-alerts">
+    <div class="alerts-page">
+      <div class="alert-header">
+        <div class="dash-section-title">LIVE ALERT FEED</div>
+        <div style="display:flex;gap:12px">
+          <div class="alert-stat"><div class="alert-stat-val" id="alert-total">0</div><div class="alert-stat-lbl">Total Alerts</div></div>
+          <div class="alert-stat"><div class="alert-stat-val" id="alert-crit-count" style="color:var(--red)">0</div><div class="alert-stat-lbl">Critical</div></div>
+          <div class="alert-stat"><div class="alert-stat-val" id="alert-warn-count" style="color:var(--yellow)">0</div><div class="alert-stat-lbl">Warnings</div></div>
+        </div>
+      </div>
+      <div id="alert-list"></div>
+    </div>
+  </div>
+
+</div><!-- page-container -->
+
+<script src="app.js"></script>
+</body>
+</html>
+
+
+
+================================================
+FILE: files/frontend/package.json
+================================================
+{
+  "dependencies": {
+    "@turf/turf": "^7.3.4"
+  }
+}
+
+
+
+================================================
+FILE: files/frontend/styles.css
+================================================
+:root{
+  --bg:#06090f;--surface:#0c1118;--s2:#111820;--s3:#162030;
+  --border:#1c2d42;--border2:#243650;
+  --cyan:#00e5ff;--cyan2:#00b4d8;--cyan-dim:#003d52;
+  --green:#00ff88;--green-dim:#003322;
+  --yellow:#ffd60a;--yellow-dim:#332d00;
+  --red:#ff3b3b;--red-dim:#3d0000;
+  --orange:#ff8800;--orange-dim:#2d1a00;
+  --purple:#a855f7;
+  --text:#dce8f5;--muted:#4a6480;--muted2:#2a3d55;
+  --font:'Outfit',sans-serif;--display:'Bebas Neue',cursive;--mono:'IBM Plex Mono',monospace;
+}
+*{margin:0;padding:0;box-sizing:border-box}
+html,body{height:100%;overflow:hidden}
+body{background:var(--bg);color:var(--text);font-family:var(--font);display:flex;flex-direction:column}
+
+/* ── TOP NAV ── */
+.top-nav{
+  display:flex;align-items:center;justify-content:space-between;
+  padding:0 24px;border-bottom:1px solid var(--border);
+  background:rgba(6,9,15,0.97);backdrop-filter:blur(20px);
+  flex-shrink:0;z-index:200;height:56px;
+}
+.nav-left{display:flex;align-items:center;gap:16px}
+.logo{display:flex;align-items:center;gap:12px}
+.logo-mark{
+  width:36px;height:36px;background:var(--cyan);border-radius:6px;
+  display:flex;align-items:center;justify-content:center;font-size:18px;
+  box-shadow:0 0 20px var(--cyan)55;
+}
+.logo-wordmark{font-family:var(--display);font-size:24px;letter-spacing:2px;line-height:1}
+.logo-wordmark em{color:var(--cyan);font-style:normal}
+
+.nav-links{display:flex;gap:0;margin-left:40px}
+.nav-link{
+  padding:16px 20px;font-size:12px;font-weight:600;text-transform:uppercase;
+  letter-spacing:1.5px;color:var(--muted);cursor:pointer;
+  border-bottom:2px solid transparent;transition:all .2s;
+  display:flex;align-items:center;gap:7px;
+}
+.nav-link:hover{color:var(--text)}
+.nav-link.active{color:var(--cyan);border-bottom-color:var(--cyan)}
+.nav-link .nav-icon{font-size:14px}
+
+.nav-right{display:flex;align-items:center;gap:20px}
+.hstat{text-align:center}
+.hstat-val{font-family:var(--mono);font-size:16px;font-weight:600;color:var(--cyan)}
+.hstat-val.red{color:var(--red)}
+.hstat-val.green{color:var(--green)}
+.hstat-val.yellow{color:var(--yellow)}
+.hstat-lbl{font-size:8px;color:var(--muted);letter-spacing:1.5px;text-transform:uppercase}
+.hstat-sep{width:1px;height:24px;background:var(--border)}
+
+.live-pill{
+  display:flex;align-items:center;gap:6px;
+  background:rgba(0,255,136,0.08);border:1px solid rgba(0,255,136,0.25);
+  border-radius:16px;padding:4px 12px;font-size:10px;color:var(--green);
+  font-family:var(--mono);letter-spacing:1px;
+}
+.pulse{width:6px;height:6px;background:var(--green);border-radius:50%;animation:blink 1s infinite}
+@keyframes blink{0%,100%{opacity:1;box-shadow:0 0 6px var(--green)}50%{opacity:0.2;box-shadow:none}}
+
+/* ── PAGE VIEWS ── */
+.page-container{flex:1;overflow:hidden;position:relative}
+.page-view{display:none;width:100%;height:100%;overflow:auto;position:absolute;inset:0}
+.page-view.active{display:flex}
+
+/* ══ DASHBOARD PAGE ══ */
+.dash-page{flex-direction:column;padding:24px;gap:24px;overflow-y:auto}
+.dash-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:16px}
+.stat-card{
+  background:var(--surface);border:1px solid var(--border);border-radius:12px;
+  padding:20px;position:relative;overflow:hidden;
+}
+.stat-card::before{content:'';position:absolute;top:0;left:0;right:0;height:3px;border-radius:12px 12px 0 0}
+.stat-card.c::before{background:var(--cyan)}
+.stat-card.g::before{background:var(--green)}
+.stat-card.y::before{background:var(--yellow)}
+.stat-card.r::before{background:var(--red)}
+.sc-label{font-size:10px;color:var(--muted);letter-spacing:2px;text-transform:uppercase;margin-bottom:8px}
+.sc-value{font-family:var(--mono);font-size:32px;font-weight:700}
+.sc-sub{font-size:11px;color:var(--muted);margin-top:4px}
+
+.dash-section-title{font-size:11px;color:var(--muted);letter-spacing:2px;text-transform:uppercase;margin-bottom:0}
+.zone-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(260px,1fr));gap:12px}
+
+/* zone cards */
+.zone-card{
+  border:1px solid var(--border);border-radius:10px;padding:12px;
+  cursor:pointer;transition:all .2s;background:var(--s2);position:relative;overflow:hidden;
+}
+.zone-card::before{content:'';position:absolute;left:0;top:0;bottom:0;width:3px;border-radius:2px 0 0 2px}
+.zone-card.good::before{background:var(--green)}
+.zone-card.warning::before{background:var(--yellow)}
+.zone-card.critical::before{background:var(--red)}
+.zone-card:hover{border-color:var(--cyan);background:rgba(0,229,255,0.04);transform:translateY(-2px)}
+.zc-head{display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:8px}
+.zc-name{font-size:13px;font-weight:700}
+.zc-type{font-size:9px;color:var(--muted);letter-spacing:1.5px;text-transform:uppercase;margin-top:2px}
+.health-ring{
+  width:38px;height:38px;border-radius:50%;
+  display:flex;align-items:center;justify-content:center;
+  font-family:var(--mono);font-size:12px;font-weight:600;flex-shrink:0;
+}
+.health-ring.good{background:rgba(0,255,136,0.1);border:2px solid var(--green);color:var(--green)}
+.health-ring.warning{background:rgba(255,214,10,0.1);border:2px solid var(--yellow);color:var(--yellow)}
+.health-ring.critical{background:rgba(255,59,59,0.1);border:2px solid var(--red);color:var(--red);animation:ring-alarm .8s infinite alternate}
+@keyframes ring-alarm{to{box-shadow:0 0 12px var(--red)}}
+.zc-metrics{display:grid;grid-template-columns:1fr 1fr;gap:3px}
+.zm{display:flex;justify-content:space-between;font-size:10px}
+.zm-k{color:var(--muted)}
+.zm-v{font-family:var(--mono);color:var(--text)}
+
+/* ══ MAP PAGE ══ */
+.map-page{flex-direction:column}
+.map-toolbar{
+  display:flex;align-items:center;gap:12px;padding:8px 16px;
+  border-bottom:1px solid var(--border);background:var(--surface);flex-shrink:0;
+}
+.tool-btn{
+  padding:5px 12px;border-radius:6px;border:1px solid var(--border);background:transparent;
+  color:var(--muted);font-family:var(--font);font-size:11px;cursor:pointer;
+  transition:all .2s;font-weight:600;letter-spacing:.5px;
+}
+.tool-btn.active{background:var(--cyan);color:#000;border-color:var(--cyan)}
+.tool-btn:hover:not(.active){border-color:var(--cyan);color:var(--cyan)}
+.metric-sel{
+  background:var(--s2);border:1px solid var(--border);border-radius:6px;
+  color:var(--text);padding:5px 10px;font-family:var(--mono);font-size:11px;outline:none;
+}
+.map-wrap{flex:1;position:relative;overflow:hidden;background:var(--bg)}
+.map-legend{
+  position:absolute;bottom:16px;right:16px;
+  background:rgba(12,17,24,0.92);border:1px solid var(--border);
+  border-radius:10px;padding:12px 16px;pointer-events:none;
+}
+.leg-title{font-size:9px;color:var(--muted);letter-spacing:2px;text-transform:uppercase;margin-bottom:8px}
+.leg-item{display:flex;align-items:center;gap:8px;font-size:10px;margin-bottom:5px}
+.leg-swatch{width:12px;height:12px;border-radius:2px}
+.map-tooltip{
+  position:absolute;background:rgba(6,9,15,0.97);border:1px solid var(--cyan);
+  border-radius:10px;padding:14px 16px;pointer-events:none;
+  display:none;min-width:200px;z-index:50;font-size:12px;
+  box-shadow:0 0 20px rgba(0,229,255,0.15);
+}
+.tt-title{font-size:14px;font-weight:700;color:var(--cyan);margin-bottom:10px;font-family:var(--display);letter-spacing:1px}
+.tt-row{display:flex;justify-content:space-between;gap:20px;margin-bottom:4px}
+.tt-key{color:var(--muted)}
+.tt-val{font-family:var(--mono);font-weight:600}
+.nlp-bar{
+  display:flex;align-items:center;gap:10px;padding:8px 16px;
+  border-top:1px solid var(--border);background:rgba(6,9,15,0.95);flex-shrink:0;
+}
+.nlp-input{
+  flex:1;background:var(--s2);border:1px solid var(--border);border-radius:8px;
+  padding:8px 14px;color:var(--text);font-family:var(--mono);font-size:12px;outline:none;
+}
+.nlp-input:focus{border-color:var(--cyan)}
+.nlp-btn{
+  background:var(--cyan);color:#000;border:none;border-radius:8px;
+  padding:8px 18px;font-family:var(--font);font-weight:700;font-size:12px;
+  cursor:pointer;white-space:nowrap;
+}
+.nlp-chips{display:flex;gap:6px;flex-wrap:nowrap;overflow-x:auto}
+.nlp-chip{
+  background:var(--s2);border:1px solid var(--border);border-radius:14px;
+  padding:4px 10px;font-size:10px;cursor:pointer;white-space:nowrap;
+  color:var(--muted);transition:all .2s;flex-shrink:0;
+}
+.nlp-chip:hover{border-color:var(--cyan);color:var(--cyan)}
+.nlp-result{
+  font-size:12px;color:var(--text);font-family:var(--mono);
+  background:var(--s2);border:1px solid var(--border);border-radius:8px;
+  padding:8px 12px;min-width:300px;max-width:400px;
+}
+
+/* ══ ANALYTICS PAGE ══ */
+.analytics-page{flex-direction:column;padding:24px;gap:24px;overflow-y:auto}
+.analytics-header{display:flex;align-items:center;justify-content:space-between}
+.chart-grid{display:grid;grid-template-columns:repeat(2,1fr);gap:16px}
+.chart-card{
+  background:var(--surface);border:1px solid var(--border);border-radius:12px;
+  padding:20px;
+}
+.chart-card-title{font-size:10px;color:var(--muted);letter-spacing:2px;text-transform:uppercase;margin-bottom:12px}
+.sparkline-wrap{position:relative;height:120px}
+canvas.sparkline{width:100%!important;height:120px!important}
+.zone-select{
+  background:var(--s2);border:1px solid var(--border);border-radius:6px;
+  color:var(--text);padding:6px 12px;font-family:var(--mono);font-size:12px;outline:none;
+}
+.correlation-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(200px,1fr));gap:12px}
+.corr-card{
+  background:var(--s2);border:1px solid var(--border);border-radius:10px;
+  padding:14px;text-align:center;
+}
+.corr-val{font-family:var(--mono);font-size:28px;font-weight:700}
+.corr-lbl{font-size:10px;color:var(--muted);margin-top:4px;letter-spacing:1px;text-transform:uppercase}
+
+/* ══ ALERTS PAGE ══ */
+.alerts-page{flex-direction:column;padding:24px;gap:16px;overflow-y:auto}
+.alert-item{
+  border-left:3px solid var(--red);padding:12px 16px;
+  background:rgba(255,59,59,0.05);border-radius:0 10px 10px 0;
+  animation:slide-in .3s ease;
+}
+.alert-item.warning{border-left-color:var(--yellow);background:rgba(255,214,10,0.05)}
+.alert-zone{font-size:14px;font-weight:700}
+.alert-msg{font-size:12px;color:var(--muted);margin-top:4px}
+.alert-time{font-size:10px;color:var(--muted2);margin-top:4px;font-family:var(--mono)}
+@keyframes slide-in{from{opacity:0;transform:translateX(-8px)}to{opacity:1;transform:translateX(0)}}
+.alert-header{display:flex;align-items:center;justify-content:space-between;gap:16px}
+.alert-stat{
+  background:var(--surface);border:1px solid var(--border);border-radius:10px;
+  padding:12px 20px;text-align:center;
+}
+.alert-stat-val{font-family:var(--mono);font-size:24px;font-weight:700;color:var(--red)}
+.alert-stat-lbl{font-size:9px;color:var(--muted);letter-spacing:1.5px;text-transform:uppercase;margin-top:4px}
+
+/* scrollbar */
+::-webkit-scrollbar{width:5px;height:5px}
+::-webkit-scrollbar-track{background:var(--bg)}
+::-webkit-scrollbar-thumb{background:var(--border2);border-radius:3px}
+
+.scanlines{position:fixed;inset:0;pointer-events:none;z-index:1000;
+  background:repeating-linear-gradient(0deg,transparent,transparent 2px,rgba(0,0,0,.03) 2px,rgba(0,0,0,.03) 4px);
+}
+
+

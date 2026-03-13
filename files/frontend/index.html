@@ -34,6 +34,9 @@
       <div class="nav-link" data-page="alerts" onclick="switchPage('alerts')">
         <span class="nav-icon">🚨</span> Alerts <span id="nav-alert-count" style="color:var(--red);font-size:10px"></span>
       </div>
+      <div class="nav-link" data-page="planner" onclick="switchPage('planner')">
+        <span class="nav-icon">🧠</span> Planner
+      </div>
     </div>
   </div>
   <div class="nav-right">
@@ -140,6 +143,68 @@
         </div>
       </div>
       <div id="alert-list"></div>
+    </div>
+  </div>
+
+  <!-- ═══ PLANNER PAGE ═══ -->
+  <div class="page-view" id="page-planner">
+    <div class="planner-page">
+      <!-- Left: Controls -->
+      <div class="planner-panel">
+        <div class="planner-title">🧠 AI URBAN PLANNER</div>
+        <div class="planner-sub">Select infrastructure to find the optimal location in Nagpur based on live simulation data.</div>
+
+        <div class="infra-grid">
+          <div class="infra-btn active" data-type="park" onclick="selectInfra('park')">
+            <div class="infra-icon">🌳</div><div class="infra-name">Park</div>
+          </div>
+          <div class="infra-btn" data-type="hospital" onclick="selectInfra('hospital')">
+            <div class="infra-icon">🏥</div><div class="infra-name">Hospital</div>
+          </div>
+          <div class="infra-btn" data-type="school" onclick="selectInfra('school')">
+            <div class="infra-icon">🎓</div><div class="infra-name">School</div>
+          </div>
+          <div class="infra-btn" data-type="ev_station" onclick="selectInfra('ev_station')">
+            <div class="infra-icon">⚡</div><div class="infra-name">EV Station</div>
+          </div>
+          <div class="infra-btn" data-type="water_plant" onclick="selectInfra('water_plant')">
+            <div class="infra-icon">💧</div><div class="infra-name">Water Plant</div>
+          </div>
+          <div class="infra-btn" data-type="solar_farm" onclick="selectInfra('solar_farm')">
+            <div class="infra-icon">☀️</div><div class="infra-name">Solar Farm</div>
+          </div>
+        </div>
+
+        <div style="margin-bottom:14px">
+          <div style="font-size:9px;color:var(--muted);letter-spacing:1.5px;text-transform:uppercase;margin-bottom:6px">TARGET AREA (Optional)</div>
+          <select id="planner-zone-sel" class="zone-select" style="width:100%;padding:10px 12px;font-size:12px;border-radius:8px">
+            <option value="all">🌐 All Zones — City-wide Search</option>
+            <option value="Z1">📍 Sitabuldi — Central</option>
+            <option value="Z2">📍 Gandhibagh — Core City</option>
+            <option value="Z3">📍 Dharampeth — West</option>
+            <option value="Z4">📍 Sadar — Cantonment</option>
+            <option value="Z5">📍 MIDC Hingna — Industrial W</option>
+            <option value="Z6">📍 Kamptee Road — North</option>
+            <option value="Z7">📍 Manish Nagar — South-West</option>
+            <option value="Z8">📍 Wathoda — East Indl</option>
+            <option value="Z9">📍 Seminary Hills — North-West</option>
+            <option value="Z10">📍 Itwari — East</option>
+            <option value="Z11">📍 Lakadganj — Central-E</option>
+            <option value="Z12">📍 Pardi — North-East</option>
+          </select>
+        </div>
+
+        <button class="plan-btn" onclick="runPlanner()">🔍 Find Best Location</button>
+
+        <div id="planner-results"></div>
+      </div>
+
+      <!-- Right: Impact -->
+      <div class="planner-impact" id="planner-impact">
+        <div style="color:var(--muted);text-align:center;padding:60px 20px;font-size:13px">
+          Select an infrastructure type and click<br>"Find Best Location" to see AI recommendations.
+        </div>
+      </div>
     </div>
   </div>
 

@@ -239,7 +239,7 @@ function initMap() {
     const cartoSrc = Object.keys(mapInstance.getStyle().sources).find(s => s!=='zones');
 
     mapInstance.addSource('zones',{type:'geojson',data:getZonesGeoJSON(),promoteId:'id'});
-    mapInstance.addLayer({id:'zones-fill',type:'fill',source:'zones',paint:{'fill-color':['get','color'],'fill-opacity':0.30}});
+    mapInstance.addLayer({id:'zones-fill',type:'fill',source:'zones',paint:{'fill-color':['get','color'],'fill-opacity':0.15}});
     mapInstance.addLayer({id:'zones-line',type:'line',source:'zones',paint:{'line-color':['get','color'],'line-width':2,'line-opacity':0.7}});
     mapInstance.addLayer({id:'zones-highlight',type:'line',source:'zones',paint:{'line-color':'#00e5ff','line-width':['case',['boolean',['feature-state','hover'],false],4,0]}});
 
@@ -288,16 +288,72 @@ function initMap() {
       }
     });
 
-    // 3D Buildings
+    // ── PLANNER MARKER (for "Show on Map") ──
+    mapInstance.addSource('planner-marker',{type:'geojson',data:{type:'FeatureCollection',features:[]}});
+    // Outer pulsing ring
+    mapInstance.addLayer({
+      id:'planner-ring',type:'circle',source:'planner-marker',
+      paint:{
+        'circle-radius':40,'circle-color':'rgba(168,85,247,0.0)',
+        'circle-stroke-width':3,'circle-stroke-color':'#a855f7',
+        'circle-stroke-opacity':0.6
+      }
+    });
+    // Bright core dot
+    mapInstance.addLayer({
+      id:'planner-dot',type:'circle',source:'planner-marker',
+      paint:{
+        'circle-radius':10,'circle-color':'#a855f7',
+        'circle-stroke-width':3,'circle-stroke-color':'#ffffff',
+        'circle-opacity':0.95
+      }
+    });
+    // Label
+    mapInstance.addLayer({
+      id:'planner-label',type:'symbol',source:'planner-marker',
+      layout:{
+        'text-field':['get','label'],
+        'text-font':['Open Sans Bold'],
+        'text-size':13,
+        'text-offset':[0,3],
+        'text-anchor':'top'
+      },
+      paint:{'text-color':'#ffffff','text-halo-color':'#a855f7','text-halo-width':2}
+    });
+
+    // 3D Buildings (from vector tiles)
     if(cartoSrc){
       mapInstance.addLayer({
-        id:'3d-buildings',source:cartoSrc,'source-layer':'building',type:'fill-extrusion',minzoom:13,
+        id:'3d-buildings',source:cartoSrc,'source-layer':'building',type:'fill-extrusion',minzoom:12,
         paint:{
-          'fill-extrusion-color':['interpolate',['linear'],['coalesce',['get','render_height'],10],0,'#1a2332',20,'#243650',50,'#2a4060'],
-          'fill-extrusion-height':['coalesce',['get','render_height'],10],
+          'fill-extrusion-color':['interpolate',['linear'],['coalesce',['get','render_height'],10],0,'#1e2d40',15,'#2a4060',30,'#365080',60,'#4a6090'],
+          'fill-extrusion-height':['*',['coalesce',['get','render_height'],10], 1.5],
           'fill-extrusion-base':['coalesce',['get','render_min_height'],0],
-          'fill-extrusion-opacity':0.75
+          'fill-extrusion-opacity':0.88
         }
+      });
+
+    // Real OSM buildings from Nagpur (fallback to synthetic if file missing)
+    mapInstance.addSource('osm-buildings',{type:'geojson',data:{type:'FeatureCollection',features:[]}});
+    mapInstance.addLayer({
+      id:'osm-3d',type:'fill-extrusion',source:'osm-buildings',minzoom:12,
+      paint:{
+        'fill-extrusion-color':['interpolate',['linear'],['get','h'],5,'#1a2538',12,'#223450',20,'#2c4568',35,'#365080',50,'#4a6090'],
+        'fill-extrusion-height':['*',['get','h'],1.3],
+        'fill-extrusion-base':0,
+        'fill-extrusion-opacity':0.85
+      }
+    });
+    // Load real data
+    fetch('nagpur_buildings.geojson')
+      .then(r => r.json())
+      .then(data => {
+        console.log('Loaded ' + data.features.length + ' real OSM buildings');
+        mapInstance.getSource('osm-buildings').setData(data);
+      })
+      .catch(() => {
+        console.log('OSM file not found, using synthetic buildings');
+        mapInstance.getSource('osm-buildings').setData(generateSyntheticBuildings());
       });
 
       // Road highlight
@@ -393,6 +449,60 @@ function lerpColor(c1,c2,t){
   const r1=h(c1.slice(1,3)),g1=h(c1.slice(3,5)),b1=h(c1.slice(5,7));
   const r2=h(c2.slice(1,3)),g2=h(c2.slice(3,5)),b2=h(c2.slice(5,7));
   return `rgb(${Math.round(r1+(r2-r1)*t)},${Math.round(g1+(g2-g1)*t)},${Math.round(b1+(b2-b1)*t)})`;
+}
+
+// Generate synthetic building footprints to fill coverage gaps
+function generateSyntheticBuildings(){
+  const features = [];
+  // Seeded random for consistency
+  let seed = 42;
+  function srand(){ seed=(seed*16807+0)%2147483647; return(seed-1)/2147483646; }
+
+  NAGPUR_ZONES.forEach(z => {
+    // Config by zone type
+    const cfg = {
+      industrial:  {count:120, spread:0.012, minW:0.00025, maxW:0.0006, minH:10, maxH:30},
+      commercial:  {count:100, spread:0.008, minW:0.00015, maxW:0.0004, minH:12, maxH:45},
+      mixed:       {count:100, spread:0.009, minW:0.00012, maxW:0.00035,minH:8,  maxH:35},
+      residential: {count:110, spread:0.010, minW:0.00008, maxW:0.00022,minH:6,  maxH:20},
+      educational: {count:80,  spread:0.008, minW:0.00015, maxW:0.0004, minH:8,  maxH:25},
+    }[z.type] || {count:80, spread:0.008, minW:0.0001, maxW:0.0003, minH:8, maxH:25};
+
+    for(let i = 0; i < cfg.count; i++){
+      // Place in a grid-ish pattern with jitter
+      const angle = srand() * Math.PI * 2;
+      const dist = (0.15 + srand() * 0.85) * cfg.spread;
+      const cx = z.lon + Math.cos(angle) * dist;
+      const cy = z.lat + Math.sin(angle) * dist;
+
+      // Random building dimensions
+      const w = cfg.minW + srand() * (cfg.maxW - cfg.minW);
+      const h = cfg.minH + srand() * (cfg.maxH - cfg.minH);
+      // Aspect ratio variety
+      const aspect = 0.4 + srand() * 1.2;
+      const hw = w * aspect;
+
+      // Random rotation
+      const rot = srand() * 0.3;
+
+      // Build rectangular polygon (4 corners)
+      const corners = [
+        [-w/2, -hw/2], [w/2, -hw/2], [w/2, hw/2], [-w/2, hw/2]
+      ].map(([dx,dy]) => {
+        const rx = dx * Math.cos(rot) - dy * Math.sin(rot);
+        const ry = dx * Math.sin(rot) + dy * Math.cos(rot);
+        return [cx + rx, cy + ry];
+      });
+      corners.push(corners[0]); // close ring
+
+      features.push({
+        type:'Feature',
+        geometry:{type:'Polygon', coordinates:[corners]},
+        properties:{h: Math.round(h), zone:z.id}
+      });
+    }
+  });
+  return {type:'FeatureCollection', features};
 }
 
 function getZonesGeoJSON(){
@@ -596,6 +706,353 @@ function nlpQuery(q){
     answer=`🏙️ City health: ${avg}/100. ${events.length} active incidents.`;
   } else { answer='💡 Try: "worst AQI", "traffic jam", "energy overload", "city health"'; }
   const res=document.getElementById('nlp-result');res.style.display='block';res.textContent=answer;
+}
+
+// ══════════════════════════════════════════════════════════
+// AI URBAN PLANNER
+// ══════════════════════════════════════════════════════════
+let selectedInfra = 'park';
+let plannerResults = [];
+
+const INFRA_CONFIG = {
+  park: {
+    icon:'🌳', label:'Green Park',
+    scoreZone: (z,d) => {
+      const aqiWeight = Math.min(1, d.aqi.at(-1) / 200);  // high AQI = needs park more
+      const nearResidential = (z.type==='residential'||z.type==='educational') ? 1 : z.type==='mixed'?0.6:0.2;
+      const healthNeed = Math.max(0, (80 - d.health.at(-1)) / 80);
+      return (aqiWeight * 0.45 + nearResidential * 0.35 + healthNeed * 0.2) * 100;
+    },
+    reasons: (z,d) => [
+      {icon:'🌫️', text:`AQI is ${d.aqi.at(-1)} — a park with ${Math.round(800+Math.random()*400)} trees could reduce this by ~${Math.round(15+Math.random()*20)}% within 500m radius`},
+      {icon:'🏠', text:`${z.area} is a ${z.type} zone — ${z.type==='residential'?'families need accessible green spaces for daily recreation':'workers and students benefit from nearby green zones for mental health'}`},
+      {icon:'🌡️', text:`Urban Heat Island effect: parks reduce ambient temperature by 2-4°C, critical for Nagpur's 45°C+ summers`},
+      {icon:'💚', text:`Zone health score is ${d.health.at(-1)}/100 — green infrastructure directly improves community well-being`},
+    ],
+    impacts: (z,d) => ({
+      aqi: {before:d.aqi.at(-1), after:Math.round(d.aqi.at(-1)*0.78), unit:'', label:'AQI'},
+      health: {before:d.health.at(-1), after:Math.min(100,Math.round(d.health.at(-1)*1.18)), unit:'/100', label:'Health Score'},
+      temperature: {before:'44°C', after:`${44-Math.round(2+Math.random()*2)}°C`, unit:'', label:'Peak Temperature', isCustom:true},
+      property: {before:'₹3200', after:`₹${3200+Math.round(400+Math.random()*300)}`, unit:'/sqft', label:'Property Value', isCustom:true},
+    })
+  },
+  hospital: {
+    icon:'🏥', label:'Hospital',
+    scoreZone: (z,d) => {
+      const healthNeed = Math.max(0, (70 - d.health.at(-1)) / 70);
+      const population = (z.type==='residential'||z.type==='mixed') ? 1 : 0.4;
+      const aqiRisk = Math.min(1, d.aqi.at(-1) / 250);
+      return (healthNeed * 0.4 + population * 0.35 + aqiRisk * 0.25) * 100;
+    },
+    reasons: (z,d) => [
+      {icon:'🚑', text:`Health score is ${d.health.at(-1)}/100 — this zone has ${d.health.at(-1)<50?'critical':'significant'} healthcare access gaps`},
+      {icon:'👥', text:`${z.area} is a ${z.type} zone with estimated ${Math.round(15000+Math.random()*25000)} residents needing nearby medical facilities`},
+      {icon:'🌫️', text:`AQI of ${d.aqi.at(-1)} means higher respiratory illness rates — proximity to treatment is essential`},
+      {icon:'⏱️', text:`Nearest hospital is ${Math.round(3+Math.random()*5)}km away — a new facility cuts emergency response time by ~${Math.round(40+Math.random()*20)}%`},
+    ],
+    impacts: (z,d) => ({
+      health: {before:d.health.at(-1), after:Math.min(100,Math.round(d.health.at(-1)*1.25)), unit:'/100', label:'Health Score'},
+      response: {before:'18min', after:`${Math.round(6+Math.random()*4)}min`, unit:'', label:'Emergency Response', isCustom:true},
+      coverage: {before:'62%', after:`${Math.round(85+Math.random()*10)}%`, unit:'', label:'Healthcare Coverage', isCustom:true},
+      mortality: {before:'2.4%', after:`${(1.2+Math.random()*0.4).toFixed(1)}%`, unit:'', label:'Preventable Mortality', isCustom:true},
+    })
+  },
+  school: {
+    icon:'🎓', label:'School',
+    scoreZone: (z,d) => {
+      const residential = z.type==='residential'?1:z.type==='mixed'?0.7:0.2;
+      const lowInfra = z.type==='industrial'?0.1:0.6;
+      const trafficSafety = Math.max(0, (100 - d.traffic.at(-1))/100);
+      return (residential * 0.45 + lowInfra * 0.25 + trafficSafety * 0.3) * 100;
+    },
+    reasons: (z,d) => [
+      {icon:'👨‍👩‍👧‍👦', text:`${z.area} is a ${z.type} area — ${z.type==='residential'?'high density of families with school-age children':'growing residential needs require educational infrastructure'}`},
+      {icon:'🚸', text:`Traffic index is ${d.traffic.at(-1)}/100 — ${d.traffic.at(-1)<50?'safe walking routes for children':'dedicated school zones would reduce pedestrian risk'}`},
+      {icon:'📚', text:`nearest school is ${(2+Math.random()*4).toFixed(1)}km away — children currently commute ${Math.round(25+Math.random()*20)} min each way`},
+      {icon:'🌱', text:`AQI is ${d.aqi.at(-1)} — ${d.aqi.at(-1)<80?'clean air ideal for outdoor activities':'indoor air filtration systems recommended'}`},
+    ],
+    impacts: (z,d) => ({
+      literacy: {before:'78%', after:`${Math.round(88+Math.random()*7)}%`, unit:'', label:'Literacy Rate', isCustom:true},
+      commute: {before:'35min', after:`${Math.round(8+Math.random()*7)}min`, unit:'', label:'Avg Student Commute', isCustom:true},
+      health: {before:d.health.at(-1), after:Math.min(100,Math.round(d.health.at(-1)*1.08)), unit:'/100', label:'Zone Health'},
+      property: {before:'₹3200', after:`₹${3200+Math.round(200+Math.random()*300)}`, unit:'/sqft', label:'Property Value', isCustom:true},
+    })
+  },
+  ev_station: {
+    icon:'⚡', label:'EV Charging Station',
+    scoreZone: (z,d) => {
+      const trafficWeight = d.traffic.at(-1)/100;
+      const commercial = z.type==='commercial'?1:z.type==='mixed'?0.7:0.3;
+      const aqiBenefit = Math.min(1, d.aqi.at(-1)/200);
+      return (trafficWeight * 0.4 + commercial * 0.3 + aqiBenefit * 0.3) * 100;
+    },
+    reasons: (z,d) => [
+      {icon:'🚗', text:`Traffic congestion is ${d.traffic.at(-1)}/100 — high vehicle density means maximum EV charging utilization`},
+      {icon:'🏪', text:`${z.type==='commercial'?'Commercial hub':'Mixed-use area'} — commuters and shoppers need convenient charging while parked`},
+      {icon:'🌫️', text:`AQI of ${d.aqi.at(-1)} — EV adoption in this zone could reduce vehicular emissions by ~${Math.round(25+Math.random()*15)}%`},
+      {icon:'⚡', text:`Current energy load is ${d.energy.at(-1)}kWh — grid can support ${d.energy.at(-1)<800?'immediate':'phased'} EV infrastructure deployment`},
+    ],
+    impacts: (z,d) => ({
+      aqi: {before:d.aqi.at(-1), after:Math.round(d.aqi.at(-1)*0.85), unit:'', label:'AQI (5-year)'},
+      traffic: {before:d.traffic.at(-1), after:Math.max(10,Math.round(d.traffic.at(-1)*0.9)), unit:'/100', label:'Traffic Load'},
+      energy: {before:d.energy.at(-1), after:Math.round(d.energy.at(-1)*1.12), unit:'kWh', label:'Energy Demand'},
+      ev_adoption: {before:'8%', after:`${Math.round(22+Math.random()*10)}%`, unit:'', label:'EV Adoption Rate', isCustom:true},
+    })
+  },
+  water_plant: {
+    icon:'💧', label:'Water Treatment Plant',
+    scoreZone: (z,d) => {
+      const waterUsage = Math.min(1, d.water.at(-1)/3000);
+      const industrial = z.type==='industrial'?1:0.3;
+      const burstRisk = events.filter(e=>e.zone===z.id && e.type==='pipe_burst').length > 0 ? 1 : 0.3;
+      return (waterUsage * 0.4 + industrial * 0.3 + burstRisk * 0.3) * 100;
+    },
+    reasons: (z,d) => [
+      {icon:'💧', text:`Water usage is ${d.water.at(-1)} L/hr — ${d.water.at(-1)>1500?'dangerously high consumption needs local treatment':'moderate usage benefits from nearby purification'}`},
+      {icon:'🏭', text:`${z.type==='industrial'?'Industrial runoff requires water treatment':'Area needs clean water supply'} — reduces pipeline distance by ${Math.round(3+Math.random()*4)}km`},
+      {icon:'🔧', text:`${events.filter(e=>e.zone===z.id).length} active incidents — a local plant provides redundancy against main supply failures`},
+      {icon:'♻️', text:`Recycled water from treatment can be used for parks and industry, saving ${Math.round(20+Math.random()*15)}% of freshwater demand`},
+    ],
+    impacts: (z,d) => ({
+      water: {before:d.water.at(-1), after:Math.round(d.water.at(-1)*0.7), unit:' L/hr', label:'Water Demand'},
+      health: {before:d.health.at(-1), after:Math.min(100,Math.round(d.health.at(-1)*1.12)), unit:'/100', label:'Health Score'},
+      leakage: {before:'35%', after:`${Math.round(8+Math.random()*7)}%`, unit:'', label:'Water Loss Rate', isCustom:true},
+      cost: {before:'₹12/KL', after:`₹${Math.round(6+Math.random()*3)}/KL`, unit:'', label:'Treatment Cost', isCustom:true},
+    })
+  },
+  solar_farm: {
+    icon:'☀️', label:'Solar Farm',
+    scoreZone: (z,d) => {
+      const energyLoad = Math.min(1, d.energy.at(-1)/2000);
+      const industrial = z.type==='industrial'?1:z.type==='commercial'?0.6:0.3;
+      const aqiBenefit = Math.min(1, d.aqi.at(-1)/200);
+      return (energyLoad * 0.45 + industrial * 0.3 + aqiBenefit * 0.25) * 100;
+    },
+    reasons: (z,d) => [
+      {icon:'⚡', text:`Energy consumption is ${d.energy.at(-1)} kWh — a solar farm could offset ${Math.round(30+Math.random()*25)}% of this zone's demand`},
+      {icon:'🏭', text:`${z.type==='industrial'?'Heavy industrial load makes solar ROI highest here':'Commercial/residential area benefits from distributed solar'}`},
+      {icon:'🌡️', text:`Nagpur receives ~5.5 kWh/m²/day of solar irradiance — among the highest in India, ideal for solar deployment`},
+      {icon:'🌫️', text:`Replacing ${Math.round(15+Math.random()*20)}% of grid power with solar reduces emissions equivalent to ${Math.round(200+Math.random()*300)} tons CO₂/year`},
+    ],
+    impacts: (z,d) => ({
+      energy: {before:d.energy.at(-1), after:Math.round(d.energy.at(-1)*0.68), unit:' kWh', label:'Grid Dependency'},
+      aqi: {before:d.aqi.at(-1), after:Math.round(d.aqi.at(-1)*0.9), unit:'', label:'AQI Impact'},
+      cost: {before:'₹8.5/kWh', after:`₹${(4+Math.random()*2).toFixed(1)}/kWh`, unit:'', label:'Energy Cost', isCustom:true},
+      carbon: {before:'1200t', after:`${Math.round(600+Math.random()*200)}t`, unit:'/yr', label:'CO₂ Emissions', isCustom:true},
+    })
+  }
+};
+
+function selectInfra(type) {
+  selectedInfra = type;
+  document.querySelectorAll('.infra-btn').forEach(b => {
+    b.classList.toggle('active', b.dataset.type === type);
+  });
+}
+
+function runPlanner() {
+  const config = INFRA_CONFIG[selectedInfra];
+  if(!config) return;
+
+  const zoneSel = document.getElementById('planner-zone-sel').value;
+
+  if(zoneSel === 'all') {
+    // City-wide: score all zones
+    const scored = NAGPUR_ZONES.map(z => {
+      const d = zoneData[z.id];
+      const score = Math.round(config.scoreZone(z, d));
+      return { zone: z, score: Math.min(100, Math.max(0, score)) };
+    });
+    scored.sort((a, b) => b.score - a.score);
+    plannerResults = scored.slice(0, 3);
+  } else {
+    // Zone-specific: find best spots WITHIN the selected zone
+    const z = NAGPUR_ZONES.find(zn => zn.id === zoneSel);
+    if(!z) return;
+    const d = zoneData[z.id];
+    const baseScore = Math.round(config.scoreZone(z, d));
+
+    // Generate 3 candidate sub-spots in different directions within the zone
+    const spots = [
+      {label:'North-West Quadrant', dlat: 0.003, dlon:-0.003, bonus: 5},
+      {label:'North-East Quadrant', dlat: 0.003, dlon: 0.003, bonus: 2},
+      {label:'South Quadrant',      dlat:-0.003, dlon: 0.001, bonus: 0},
+    ];
+    plannerResults = spots.map((sp, i) => ({
+      zone: {
+        ...z,
+        name: z.name + ' — ' + sp.label,
+        lat: z.lat + sp.dlat + (Math.random()-0.5)*0.001,
+        lon: z.lon + sp.dlon + (Math.random()-0.5)*0.001,
+        _parentZone: z  // keep reference to original zone for data
+      },
+      score: Math.min(100, Math.max(0, baseScore + sp.bonus - i * 4 + Math.round(Math.random()*6 - 3)))
+    }));
+    plannerResults.sort((a,b) => b.score - a.score);
+  }
+
+  // Render recommendation cards
+  const results = document.getElementById('planner-results');
+  const titleText = zoneSel === 'all' ? 'TOP RECOMMENDATIONS' : 'BEST SPOTS IN ' + plannerResults[0].zone._parentZone?.name.toUpperCase() || '';
+  results.innerHTML = '<div class="why-title" style="margin-bottom:12px">' + (zoneSel === 'all' ? 'TOP RECOMMENDATIONS' : titleText) + '</div>' +
+    plannerResults.map((r, i) => `
+      <div class="rec-card rank-${i+1} ${i===0?'selected':''}" onclick="showRecommendation(${i})">
+        <div class="rec-rank r${i+1}">#${i+1}</div>
+        <div class="rec-zone">${config.icon} ${r.zone.name}</div>
+        <div class="rec-area">${r.zone.area} · ${r.zone.type}</div>
+        <div class="rec-score">
+          <div class="rec-score-bar"><div class="rec-score-fill" style="width:${r.score}%"></div></div>
+          <div class="rec-score-val">${r.score}%</div>
+        </div>
+      </div>
+    `).join('');
+
+  // Show #1 recommendation impact
+  showRecommendation(0);
+}
+
+function showRecommendation(index) {
+  const config = INFRA_CONFIG[selectedInfra];
+  const rec = plannerResults[index];
+  if(!rec || !config) return;
+
+  const z = rec.zone;
+  const dataZone = z._parentZone || z;  // use parent zone's data for sub-spots
+  const d = zoneData[dataZone.id];
+
+  // Highlight selected card
+  document.querySelectorAll('.rec-card').forEach((c,i) => c.classList.toggle('selected', i===index));
+
+  const reasons = config.reasons(z, d);
+  const impacts = config.impacts(z, d);
+
+  const impactPanel = document.getElementById('planner-impact');
+  impactPanel.innerHTML = `
+    <div class="impact-header">${config.icon} ${config.label} — RECOMMENDATION</div>
+    <div class="impact-zone-name">${z.name}</div>
+    <div class="impact-zone-area">${z.area} · ${z.type} zone · Suitability: ${rec.score}%</div>
+
+    <div style="display:flex;align-items:center;gap:10px;margin:12px 0 16px;padding:10px 14px;background:var(--surface);border:1px solid var(--border);border-radius:8px">
+      <span style="font-size:14px">📍</span>
+      <span style="font-family:var(--mono);font-size:13px;color:var(--cyan)">${z.lat.toFixed(4)}, ${z.lon.toFixed(4)}</span>
+      <button onclick="navigator.clipboard.writeText('${z.lat.toFixed(6)}, ${z.lon.toFixed(6)}');this.textContent='✅ Copied!';setTimeout(()=>this.textContent='📋 Copy',1500)" style="margin-left:auto;background:var(--s2);border:1px solid var(--border);border-radius:6px;padding:4px 10px;color:var(--text);font-family:var(--font);font-size:11px;cursor:pointer">📋 Copy</button>
+    </div>
+
+    <div class="why-section">
+      <div class="why-title">🔍 WHY THIS LOCATION?</div>
+      <ul class="why-list">
+        ${reasons.map(r => `<li class="why-item"><span class="why-icon">${r.icon}</span><span>${r.text}</span></li>`).join('')}
+      </ul>
+    </div>
+
+    <div class="why-title">📊 PROJECTED CITY IMPACT</div>
+    <div class="impact-grid">
+      ${Object.values(impacts).map(imp => {
+        const before = imp.isCustom ? imp.before : imp.before;
+        const after = imp.isCustom ? imp.after : imp.after;
+        // Determine if positive
+        let isPositive = true;
+        if(!imp.isCustom) {
+          isPositive = (imp.label.includes('Health') || imp.label.includes('Coverage')) ? after > before : after < before;
+        }
+        return `<div class="impact-card ${isPositive?'positive':'negative'}">
+          <div class="impact-metric">${imp.label}</div>
+          <div class="impact-before">${before}${imp.isCustom?'':imp.unit}</div>
+          <div class="impact-arrow">${isPositive?'⬇️ ':'⬆️ '}</div>
+          <div class="impact-after" style="color:${isPositive?'var(--green)':'var(--orange)'}">${after}${imp.isCustom?'':imp.unit}</div>
+        </div>`;
+      }).join('')}
+    </div>
+
+    <button class="map-link-btn" onclick="showOnMap('${z.id}')">🗺️ Show on 3D Map</button>
+  `;
+}
+
+function showOnMap(zoneId) {
+  selectedZone = zoneId;
+  const config = INFRA_CONFIG[selectedInfra];
+  const z = NAGPUR_ZONES.find(zn => zn.id === zoneId);
+  switchPage('map');
+
+  if(mapInstance && z) {
+    // First fly to the zone so tiles load
+    mapInstance.flyTo({center:[z.lon, z.lat], zoom:16, pitch:60, duration:2000});
+
+    // After fly completes and tiles load, find open space
+    setTimeout(() => {
+      const openSpot = findOpenSpace(z.lon, z.lat);
+      const spotLon = openSpot[0], spotLat = openSpot[1];
+      window._plannerSpot = {lat: spotLat, lon: spotLon};
+
+      const markerData = {
+        type:'FeatureCollection',
+        features:[{
+          type:'Feature',
+          geometry:{type:'Point',coordinates:[spotLon, spotLat]},
+          properties:{
+            label: (config ? config.icon + ' ' + config.label : 'Recommendation') + '\n' + z.name + ' \u2014 Open Space\n' + spotLat.toFixed(4) + ', ' + spotLon.toFixed(4)
+          }
+        }]
+      };
+      if(mapInstance.getSource('planner-marker')) {
+        mapInstance.getSource('planner-marker').setData(markerData);
+      }
+
+      // Pan to the open spot
+      mapInstance.panTo([spotLon, spotLat], {duration:800});
+
+      // Animate pulsing ring
+      let pulseSize = 20, growing = true;
+      if(window._plannerPulse) clearInterval(window._plannerPulse);
+      window._plannerPulse = setInterval(() => {
+        if(!mapInstance) { clearInterval(window._plannerPulse); return; }
+        pulseSize += growing ? 1.5 : -1.5;
+        if(pulseSize >= 50) growing = false;
+        if(pulseSize <= 20) growing = true;
+        mapInstance.setPaintProperty('planner-ring','circle-radius', pulseSize);
+        mapInstance.setPaintProperty('planner-ring','circle-stroke-opacity', 0.3 + (50 - pulseSize)/50 * 0.5);
+      }, 40);
+    }, 2500);
+  }
+}
+
+// Scan points around center and find one with no buildings or roads
+function findOpenSpace(centerLon, centerLat) {
+  if(!mapInstance) return [centerLon, centerLat];
+  const style = mapInstance.getStyle();
+  const cartoSrc = Object.keys(style.sources).find(s =>
+    s !== 'zones' && s !== 'pollution-heat' && s !== 'traffic-roads' &&
+    s !== 'road-highlight' && s !== 'planner-marker'
+  );
+  const blockerLayers = style.layers
+    .filter(l => l.source === cartoSrc && (l['source-layer'] === 'building' || l['source-layer'] === 'transportation'))
+    .map(l => l.id);
+  if(!blockerLayers.length) return [centerLon, centerLat];
+
+  // Spiral grid of candidate points (~100m steps)
+  const step = 0.001;
+  const candidates = [];
+  for(let r = 1; r <= 3; r++) {
+    for(let angle = 0; angle < 360; angle += (r === 1 ? 45 : r === 2 ? 30 : 60)) {
+      const rad = angle * Math.PI / 180;
+      candidates.push([centerLon + Math.cos(rad)*step*r, centerLat + Math.sin(rad)*step*r]);
+    }
+  }
+
+  let bestPoint = [centerLon, centerLat];
+  let minBlockers = Infinity;
+  candidates.forEach(([lon, lat]) => {
+    try {
+      const px = mapInstance.project([lon, lat]);
+      const bbox = [[px.x - 15, px.y - 15], [px.x + 15, px.y + 15]];
+      const features = mapInstance.queryRenderedFeatures(bbox, {layers: blockerLayers});
+      if(features.length < minBlockers) {
+        minBlockers = features.length;
+        bestPoint = [lon, lat];
+      }
+    } catch(e) { /* off screen */ }
+  });
+  return bestPoint;
 }
 
 // ══════════════════════════════════════════════════════════
