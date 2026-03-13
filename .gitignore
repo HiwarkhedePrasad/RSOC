@@ -1,4 +1,10 @@
+# Node
+node_modules/
+
+# Python
 venv/
 files/venv/
+
+# Python cache
 __pycache__/
 *.pyc
