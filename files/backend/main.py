@@ -2,7 +2,7 @@
 NexaCity Backend — FastAPI
 Run: uvicorn main:app --reload --port 8000
 """
-from fastapi import FastAPI
+from fastapi import FastAPI, UploadFile, File
 from fastapi.middleware.cors import CORSMiddleware
 import pandas as pd
 import numpy as np
@@ -11,6 +11,7 @@ from sklearn.preprocessing import StandardScaler
 import json
 from datetime import datetime, timedelta
 import os
+import io
 
 app = FastAPI(title="NexaCity API")
 
@@ -244,6 +245,52 @@ async def nlp_query(body: dict):
 
     return {"answer": "I can answer questions about: air quality, traffic, energy, water, anomalies, or overall city health. Try: 'Which zones have the worst AQI?' or 'Where is energy overloading?'",
             "zones": [], "type": "help"}
+
+@app.post("/api/upload")
+async def upload_csv(file: UploadFile = File(...)):
+    """Upload CSV data to replace the city dataset"""
+    try:
+        # Read uploaded file
+        contents = await file.read()
+        df_new = pd.read_csv(io.StringIO(contents.decode('utf-8')))
+
+        # Validate required columns
+        required_cols = ["timestamp", "zone_id", "zone_name", "zone_type", "lat", "lon"]
+        missing_cols = [c for c in required_cols if c not in df_new.columns]
+        if missing_cols:
+            return {"error": f"Missing columns: {missing_cols}", "status": "failed"}
+
+        # Parse timestamp
+        df_new["timestamp"] = pd.to_datetime(df_new["timestamp"])
+
+        # Update global dataframe
+        global df, anomaly_df, anomaly_results
+        df = df_new.copy()
+
+        # Recompute anomalies
+        anomaly_results = {}
+        for zone_id, zone_df in df.groupby("zone_id"):
+            features = zone_df[METRICS].fillna(0)
+            scaler = StandardScaler()
+            scaled = scaler.fit_transform(features)
+            model = IsolationForest(contamination=0.05, random_state=42)
+            preds = model.fit_predict(scaled)
+            scores = model.score_samples(scaled)
+            zone_df = zone_df.copy()
+            zone_df["anomaly"] = (preds == -1)
+            zone_df["anomaly_score"] = -scores
+            anomaly_results[zone_id] = zone_df
+
+        anomaly_df = pd.concat(anomaly_results.values())
+
+        return {
+            "status": "success",
+            "records": len(df),
+            "zones": df["zone_id"].nunique(),
+            "columns": list(df.columns)
+        }
+    except Exception as e:
+        return {"error": str(e), "status": "failed"}
 
 if __name__ == "__main__":
     import uvicorn
