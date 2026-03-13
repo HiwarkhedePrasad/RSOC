@@ -398,9 +398,9 @@ function initMap() {
       document.getElementById('tt-name').textContent=zone.name.toUpperCase();
       document.getElementById('tt-body').innerHTML=`
         <div class="tt-row"><span class="tt-key">Area</span><span class="tt-val">${zone.area}</span></div>
-        <div class="tt-row"><span class="tt-key">AQI</span><span class="tt-val" style="color:${d.aqi.at(-1)>150?'var(--red)':'var(--green)'}">${d.aqi.at(-1)}</span></div>
+        <div class="tt-row"><span class="tt-key">AQI</span><span class="tt-val" style="color:${d.aqi.at(-1)>150?'var(--color-status-critical)':'var(--color-status-success)'}">${d.aqi.at(-1)}</span></div>
         <div class="tt-row"><span class="tt-key">Traffic</span><span class="tt-val">${d.traffic.at(-1)}/100</span></div>
-        <div class="tt-row"><span class="tt-key">Health</span><span class="tt-val" style="color:${d.health.at(-1)<40?'var(--red)':'var(--green)'}">${d.health.at(-1)}/100</span></div>`;
+        <div class="tt-row"><span class="tt-key">Health</span><span class="tt-val" style="color:${d.health.at(-1)<40?'var(--color-status-critical)':'var(--color-status-success)'}">${d.health.at(-1)}/100</span></div>`;
       tt.style.display='block';tt.style.left=Math.min(e.point.x+16,window.innerWidth-220)+'px';tt.style.top=Math.min(e.point.y-40,window.innerHeight-200)+'px';
     }
   });
@@ -439,10 +439,15 @@ function getMetricVal(zid){
   switch(activeMetric){case'aqi':return l(d.aqi);case'traffic':return l(d.traffic);case'energy':return l(d.energy);case'water':return l(d.water);case'health':return l(d.health);default:return 0;}
 }
 function metricToColor(val,metric){
+  // Global palette strictly aligned to root CSS variables for 3d map blocks
+  // mapLibre doesn't support var(), so raw hex are used to match the color scales
   if(metric==='health'){if(val>65)return{top:'#00ff88'};if(val>40)return{top:'#ffd60a'};return{top:'#ff3b3b'};}
   const ranges={aqi:[40,300],traffic:[0,100],energy:[50,3000],water:[50,4000]};
   const[lo,hi]=ranges[metric]||[0,100];const t=Math.max(0,Math.min(1,(val-lo)/(hi-lo)));
-  if(t<0.33)return{top:'#00ff88'};if(t<0.55)return{top:'#ffd60a'};if(t<0.75)return{top:'#ff8800'};return{top:'#ff3b3b'};
+  if(t<0.33)return{top:'#00ff88'};   // Green success
+  if(t<0.55)return{top:'#ffd60a'};   // Yellow warning
+  if(t<0.75)return{top:'#ff8800'};   // Orange severity
+  return{top:'#ff3b3b'};           // Red critical
 }
 function lerpColor(c1,c2,t){
   const h=s=>parseInt(s,16);
@@ -513,7 +518,7 @@ function getZonesGeoJSON(){
     const val=getMetricVal(z.id);const colors=metricToColor(val,activeMetric);
     const hasAlert=events.some(e=>e.zone===z.id);
     let color=colors.top;
-    if(hasAlert&&Math.sin(SIM.tick*0.4)>0) color='#ff3b3b';
+    if(hasAlert&&Math.sin(SIM.tick*0.4)>0) color='#ff3b3b'; // Needs hard hex for maplibre 
     else if(z.id===selectedZone) color=lerpColor(colors.top,'#00e5ff',0.4);
     f.properties.color=color;
   });
@@ -577,12 +582,12 @@ function updateTrafficRoads(){
     // Skip low-traffic roads
     if(congestion < 20) return;
 
-    // Color: green → yellow → orange → red
+    // Color: green → yellow → orange → red (Using Token Hex equivalents)
     let color;
-    if(congestion < 40) color = '#22c55e';
-    else if(congestion < 60) color = '#eab308';
-    else if(congestion < 80) color = '#f97316';
-    else color = '#ef4444';
+    if(congestion < 40) color = '#00ff88';
+    else if(congestion < 60) color = '#ffd60a';
+    else if(congestion < 80) color = '#ff8800';
+    else color = '#ff3b3b';
 
     coloredFeatures.push({
       type: 'Feature',
